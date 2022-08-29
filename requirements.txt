@@ -1,0 +1,8 @@
+opencv-python
+h5py
+matplotlib
+numpy
+openslide-python
+Pillow
+torch
+torchvision

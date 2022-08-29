@@ -1,0 +1,121 @@
+# PIP, using PEP621
+[project]
+name = "wsi_core"
+authors = [
+    {name = "Andre Rendeiro", email = "arendeiro@cemm.at"},
+]
+description = "Tools to process whole slide images. A fork of mahmoodlab/CLAM"
+readme = "README.md"
+keywords = [
+    "computational pathology",
+]
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Development Status :: 3 - Alpha",
+    "Typing :: Typed",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+#license = "gpt3"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python",
+    "h5py",
+    "matplotlib",
+    "numpy",
+    "openslide-python",
+    "Pillow",
+    "torch",
+    "torchvision",
+]
+dynamic = ['version']
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "black[d]",
+    "mypy",
+    "pylint",
+    "git-lint",
+    "pytest",
+    "rich",
+    "PyQt5",
+]
+doc = [
+    "Sphinx",
+    "sphinx-issues",
+    "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints"
+]
+
+[project.urls]
+homepage = "https://github.com/rendeirolab/CLAM"
+documentation = "https://github.com/rendeirolab/CLAM/blob/main/README.md"
+repository = "https://github.com/rendeirolab/CLAM"
+
+[build-system]
+# requires = ["poetry>=0.12", "setuptools>=45", "wheel", "poetry-dynamic-versioning"]
+# build-backend = "poetry.masonry.api"
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+write_to = "wsi_core/_version.py"
+write_to_template = 'version = __version__ = "{version}"'
+
+[tool.black]
+line-length = 90
+target-version = ['py310']
+include = '\.pyi?$'
+exclude = '''
+
+(
+  /(
+      \.eggs         # exclude a few common directories in the
+    | \.git          # root of the project
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+  | foo.py           # also separately exclude a file named foo.py in
+                     # the root of the project
+)
+'''
+
+[tool.mypy]
+python_version = '3.10'
+warn_return_any = true
+warn_unused_configs = true
+
+# Packages without type annotations in shed yet
+[[tool.mypy.overrides]]
+module = [
+    'numpy.*',
+    'pandas.*',
+    'scipy.*',
+    'skimage.*',
+    'matplotlib.*',
+    'networkx.*',
+    #
+    'wsi_core.*'
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers"
+testpaths = [
+    "tests",
+    "integration",
+]
+markers = [
+    'slow', # 'marks tests as slow (deselect with "-m 'not slow'")',
+    'serial'
+]
