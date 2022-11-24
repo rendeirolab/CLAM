@@ -13,34 +13,55 @@ The package has been renamed to `wsi_core` as that was the name of the module re
 ## Usage
 
 ```python
+from pathlib import Path
+
+import requests
+import h5py
+import numpy as np
+import pandas as pd
+
 from wsi_core import WholeSlideImage
 
-slide = WholeSlideImage('slide.svs')
+# Get example slide image
+slide_name = "GTEX-1117F-1126"
+slide_file = Path(f"{slide_name}.svs")
+if not slide_file.exists():
+    url = f"https://brd.nci.nih.gov/brd/imagedownload/{slide_name}"
+    with open(slide_file, "wb") as handle:
+        req = requests.get(url)
+        handle.write(req.content)
+
+# Instantiate slide class
+slide = WholeSlideImage(slide_file)
 
 # Segment tissue
 url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
 params = pd.read_csv(url).squeeze()
 slide.segmentTissue(seg_level=2, filter_params=params.to_dict())
-slide.saveSegmentation('slide.segmentation.pickle')
+slide.saveSegmentation(f"{slide_name}.segmentation.pickle")
 
 # Visualize segmentation
-slide.initSegmentation('slide.segmentation.pickle')  # load segmentation
-slide.visWSI(vis_level=2).save("slide.segmentation.png")
+slide.initSegmentation(f"{slide_name}.segmentation.pickle")  # load segmentation
+slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
 
-# Generate coordinates for tiling
-slide.process_contours('.', patch_size=512, step_size=512)
+# Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
+slide.process_contours(save_path='.', patch_level=0, patch_size=512, step_size=512)
 
 # Read one tile
-import h5py
-h5 = h5py.File('./slide.h5')
-params = dict(h5["coords"].attrs)
-kwargs = dict(
-    level=params["patch_level"], size=(params["patch_size"], params["patch_size"])
-)
-coords = h5["coords"][()]
-
-slide.wsi  # openslide instance of the slide
-tile = slide.wsi.read_region(coords[0], **kwargs)[..., :-1] / 255
+# # get coordinates and parameters of tile generation from h5 file
+with h5py.File(f"{slide_name}.h5") as h5:
+    params = dict(h5["coords"].attrs)
+    kwargs = dict(
+        level=params["patch_level"], size=(params["patch_size"], params["patch_size"])
+    )
+    coords = h5["coords"][()]
+# # this is an openslide instance of the slide
+slide.wsi
+# # use openslide to read tile with given tile parameters
+tile = np.asarray(slide.wsi.read_region(coords[0], **kwargs))[..., :-1] / 255
+# # check tile properties
+tile.shape  # (512, 512, 3)
+tile.min(), tile.max()  # (0, 1)
 ```
 
 ## Reference
