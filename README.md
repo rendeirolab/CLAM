@@ -38,31 +38,20 @@ slide = WholeSlideImage(slide_file)
 url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
 params = pd.read_csv(url).squeeze()
 slide.segmentTissue(seg_level=2, filter_params=params.to_dict())
-slide.saveSegmentation(f"{slide_name}.segmentation.pickle")
+slide.saveSegmentation()
 
 # Visualize segmentation
-slide.initSegmentation(f"{slide_name}.segmentation.pickle")  # load segmentation
+slide.initSegmentation()
 slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
 
 # Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
-slide.process_contours(save_path='.', patch_level=0, patch_size=512, step_size=512)
-
-# Read one tile
-# # get coordinates and parameters of tile generation from h5 file
-with h5py.File(f"{slide_name}.h5") as h5:
-    params = dict(h5["coords"].attrs)
-    kwargs = dict(
-        level=params["patch_level"], size=(params["patch_size"], params["patch_size"])
-    )
-    coords = h5["coords"][()]
-# # this is an openslide instance of the slide
-slide.wsi
-# # use openslide to read tile with given tile parameters
-tile = np.asarray(slide.wsi.read_region(coords[0], **kwargs))[..., :-1] / 255
-# # check tile properties
-tile.shape  # (512, 512, 3)
-tile.min(), tile.max()  # (0, 1)
+slide.createPatches_bag_hdf5(slide_file.parent, patch_size=224, step_size=224)
+slide.get_tile_coordinates()
+slide.get_tile_images()
 ```
+from wsi_core.dataset_h5 import Whole_Slide_Bag
+
+
 
 ## Reference
 Please cite the [paper of the original authors](https://www.nature.com/articles/s41551-020-00682-w):

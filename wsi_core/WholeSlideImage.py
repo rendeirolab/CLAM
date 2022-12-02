@@ -1,9 +1,7 @@
 import multiprocessing as mp
 import math
-import itertools
 import os
 import time
-import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 import cv2
@@ -16,9 +14,7 @@ import h5py
 from .wsi_utils import (
     savePatchIter_bag_hdf5,
     initialize_hdf5_bag,
-    coord_generator,
     save_hdf5,
-    sample_indices,
     screen_coords,
     isBlackPatch,
     isWhitePatch,
@@ -32,27 +28,30 @@ from .util_classes import (
     Contour_Checking_fn,
 )
 from .file_utils import load_pkl, save_pkl
+from .utils import Path
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
 
 class WholeSlideImage(object):
-    def __init__(self, path):
+    def __init__(self, path: Path | str):
 
         """
         Args:
             path (str): fullpath to WSI file
         """
-
-        #         self.name = ".".join(path.split("/")[-1].split('.')[:-1])
-        self.name = os.path.splitext(os.path.basename(path))[0]
+        if isinstance(path, str):
+            path = Path(path)
+        self.path = path
+        self.name = path.stem
         self.wsi = openslide.open_slide(path)
         self.level_downsamples = self._assertLevelDownsamples()
         self.level_dim = self.wsi.level_dimensions
 
         self.contours_tissue = None
         self.contours_tumor = None
-        self.hdf5_file = None
+        self.mask_file: Path = path.replace_(".svs", ".segmentation.pickle")
+        self.hdf5_file: Path = path.replace_(".svs", ".h5")
 
     def getOpenSlide(self):
         return self.wsi
@@ -110,15 +109,17 @@ class WholeSlideImage(object):
             self.contours_tumor, key=cv2.contourArea, reverse=True
         )
 
-    def initSegmentation(self, mask_file):
+    def initSegmentation(self, mask_file: Path | str = None):
+        if mask_file is None:
+            mask_file = self.mask_file
         # load segmentation results from pickle file
-        import pickle
-
         asset_dict = load_pkl(mask_file)
         self.holes_tissue = asset_dict["holes"]
         self.contours_tissue = asset_dict["tissue"]
 
-    def saveSegmentation(self, mask_file):
+    def saveSegmentation(self, mask_file: Path | str = None):
+        if mask_file is None:
+            mask_file = self.mask_file
         # save segmentation results using pickle
         asset_dict = {"holes": self.holes_tissue, "tissue": self.contours_tissue}
         save_pkl(mask_file, asset_dict)
@@ -208,7 +209,7 @@ class WholeSlideImage(object):
             img_otsu = cv2.morphologyEx(img_otsu, cv2.MORPH_CLOSE, kernel)
 
         scale = self.level_downsamples[seg_level]
-        scaled_ref_patch_area = int(ref_patch_size ** 2 / (scale[0] * scale[1]))
+        scaled_ref_patch_area = int(ref_patch_size**2 / (scale[0] * scale[1]))
         filter_params = filter_params.copy()
         filter_params["a_t"] = filter_params["a_t"] * scaled_ref_patch_area
         filter_params["a_h"] = filter_params["a_h"] * scaled_ref_patch_area
@@ -347,13 +348,15 @@ class WholeSlideImage(object):
 
     def createPatches_bag_hdf5(
         self,
-        save_path,
+        save_path: Path | str = None,
         patch_level=0,
         patch_size=256,
         step_size=256,
         save_coord=True,
         **kwargs,
     ):
+        if save_path is None:
+            save_path = self.hdf5_file
         contours = self.contours_tissue
         contour_holes = self.holes_tissue
 
@@ -368,7 +371,7 @@ class WholeSlideImage(object):
                 cont, idx, patch_level, save_path, patch_size, step_size, **kwargs
             )
 
-            if self.hdf5_file is None:
+            if not self.hdf5_file.exists():
                 try:
                     first_patch = next(patch_gen)
 
@@ -377,7 +380,7 @@ class WholeSlideImage(object):
                     continue
 
                 file_path = initialize_hdf5_bag(first_patch, save_coord=save_coord)
-                self.hdf5_file = file_path
+                self.hdf5_file = Path(file_path)
 
             for patch in patch_gen:
                 savePatchIter_bag_hdf5(patch)
@@ -586,6 +589,18 @@ class WholeSlideImage(object):
                     save_hdf5(save_path_hdf5, asset_dict, mode="a")
 
         return self.hdf5_file
+
+    def get_tile_coordinates(self, hdf5_file=None):
+        if hdf5_file is None:
+            hdf5_file = self.hdf5_file or self.tile_h5
+        with h5py.File(hdf5_file) as h5:
+            return h5["coords"][()]
+
+    def get_tile_images(self, hdf5_file=None):
+        if hdf5_file is None:
+            hdf5_file = self.hdf5_file or self.tile_h5
+        with h5py.File(hdf5_file) as h5:
+            return h5["imgs"][()]
 
     def process_contour(
         self,
