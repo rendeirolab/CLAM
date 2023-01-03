@@ -53,6 +53,11 @@ class WholeSlideImage(object):
         self.mask_file: Path = path.replace_(".svs", ".segmentation.pickle")
         self.hdf5_file: Path = path.replace_(".svs", ".h5")
 
+        self.target = None
+
+    def __repr__(self):
+        return f"WholeSlideImage('{self.path}')"
+
     def getOpenSlide(self):
         return self.wsi
 
@@ -356,15 +361,11 @@ class WholeSlideImage(object):
         **kwargs,
     ):
         if save_path is None:
-            save_path = self.hdf5_file
+            save_path = self.hdf5_file.parent
         contours = self.contours_tissue
         contour_holes = self.holes_tissue
 
-        print(
-            "Creating patches for: ",
-            self.name,
-            "...",
-        )
+        print(f"Creating patches for: {self.name}")
         elapsed = time.time()
         for idx, cont in enumerate(contours):
             patch_gen = self._getPatchGenerator(
@@ -386,6 +387,26 @@ class WholeSlideImage(object):
                 savePatchIter_bag_hdf5(patch)
 
         return self.hdf5_file
+
+    def as_tile_bag(self):
+        # from wsi_core.dataset_h5 import Whole_Slide_Bag
+        from wsi_core.dataset_h5 import Whole_Slide_Bag_FP
+
+        # dataset = Whole_Slide_Bag(self.hdf5_file, pretrained=True)
+        dataset = Whole_Slide_Bag_FP(
+            self.hdf5_file, self.wsi, pretrained=True, target=self.target
+        )
+        return dataset
+
+    def as_data_loader(self, batch_size: int = 128, **kwargs):
+        from wsi_core.utils import collate_features
+        from torch.utils.data import DataLoader
+
+        dataset = self.as_tile_bag()
+        loader = DataLoader(
+            dataset=dataset, batch_size=batch_size, collate_fn=collate_features
+        )
+        return loader
 
     def _getPatchGenerator(
         self,
@@ -590,17 +611,105 @@ class WholeSlideImage(object):
 
         return self.hdf5_file
 
-    def get_tile_coordinates(self, hdf5_file=None):
+    def has_tile_coords(self):
+        with h5py.File(self.hdf5_file) as h5:
+            return "coords" in h5
+
+    def has_tile_images(self):
+        with h5py.File(self.hdf5_file) as h5:
+            return "imgs" in h5
+
+    def get_tile_coordinates(self, hdf5_file: Path = None):
         if hdf5_file is None:
-            hdf5_file = self.hdf5_file or self.tile_h5
+            hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file) as h5:
             return h5["coords"][()]
 
-    def get_tile_images(self, hdf5_file=None):
+    def get_tile_coordinate_level_size(self, hdf5_file: Path = None) -> tuple[int, int]:
         if hdf5_file is None:
-            hdf5_file = self.hdf5_file or self.tile_h5
+            hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file) as h5:
-            return h5["imgs"][()]
+            attrs = h5["coords"].attrs
+            return attrs["patch_level"], attrs["patch_size"]
+
+    def get_tile_images(
+        self,
+        hdf5_file: Path = None,
+        as_generator: bool = False,
+    ):
+        if hdf5_file is None:
+            hdf5_file = self.hdf5_file  # or self.tile_h5
+
+        if self.has_tile_images():
+            print("Returning from HDF5 images.")
+            with h5py.File(hdf5_file) as h5:
+                if as_generator:
+                    print("Returning generator.")
+                    raise NotImplementedError(
+                        "Yielding from tiled images in a HDF5 file still not implemented."
+                    )
+                    # # Read up on how to return a yield from on a context manager
+                    # # Maybe it is not possible to return a single item from a hdf5 without reading the whole thing?
+                    # yield from h5["imgs"][()]
+                else:
+                    return h5["imgs"][()]
+        elif self.has_tile_coords():
+            print("Returning from tiles.")
+            level, size = self.get_tile_coordinate_level_size(hdf5_file)
+            coords = self.get_tile_coordinates(hdf5_file=hdf5_file)
+            if not as_generator:
+                return np.asarray(
+                    list(self.get_tile_images(hdf5_file, as_generator=True))
+                )
+            else:
+                print("Returning generator.")
+                for coord in coords:
+                    yield np.asarray(
+                        self.wsi.read_region(
+                            coord, level=level, size=(size, size)
+                        ).convert("RGB")
+                    )
+        else:
+            raise ValueError("WholeSlideImage does not have a tiles yet.")
+
+    def save_tile_images(
+        self,
+        output_dir: Path,
+        format: str = "jpg",
+        attributes: bool = True,
+        n: int = None,
+        frac: float = 1.0,
+    ):
+        import pandas as pd
+
+        if n is not None:
+            assert frac is None, "Only one of `n` or `frac` can be used."
+        if frac is not None:
+            assert n is None, "Only one of `n` or `frac` can be used."
+        if attributes:
+            assert hasattr(
+                self, "attributes"
+            ), "If `attributes`, then a dictionary named `attributes` must be set."
+
+        hdf5_file = self.hdf5_file  # or self.tile_h5
+        level, size = self.get_tile_coordinate_level_size(hdf5_file)
+        coords = self.get_tile_coordinates(hdf5_file)
+        nc = coords.shape[0]
+        if n is not None:
+            if n > nc:
+                print(f"Slide has less tiles than requested `n`, taking max: {nc}.")
+                n = nc
+
+        sel = pd.Series(range(nc)).sample(frac=frac, n=n).values
+
+        output_prefix = output_dir / (
+            self.name + ("." + ".".join(self.attributes.values()) if attributes else "")
+        )
+        for coord in coords[sel]:
+            # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.format
+            fp = output_prefix + f".{coord[0]}.{coord[1]}.{format}"
+            img = self.wsi.read_region(coord, level=level, size=(size, size))
+            img.convert("RGB").save(fp)
 
     def process_contour(
         self,

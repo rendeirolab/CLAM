@@ -119,7 +119,7 @@ def initialize_hdf5_bag(first_patch, save_coord=False):
         name,
         save_path,
     ) = tuple(first_patch.values())
-    file_path = os.path.join(save_path, name) + ".h5"
+    file_path = save_path / name + ".h5"
     file = h5py.File(file_path, "w")
     img_patch = np.array(img_patch)[np.newaxis, ...]
     dtype = img_patch.dtype

@@ -13,14 +13,13 @@ The package has been renamed to `wsi_core` as that was the name of the module re
 ## Usage
 
 ```python
-from pathlib import Path
-
 import requests
-import h5py
-import numpy as np
 import pandas as pd
+import torch
+import tqdm
 
 from wsi_core import WholeSlideImage
+from wsi_core.utils import Path
 
 # Get example slide image
 slide_name = "GTEX-1117F-1126"
@@ -45,13 +44,19 @@ slide.initSegmentation()
 slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
 
 # Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
-slide.createPatches_bag_hdf5(slide_file.parent, patch_size=224, step_size=224)
+slide.createPatches_bag_hdf5(patch_size=224, step_size=224)
 slide.get_tile_coordinates()
 slide.get_tile_images()
+
+# Use in a torch dataloader
+loader = slide.as_data_loader()
+
+# Extract features
+model = torch.hub.load("pytorch/vision", "resnet50", pretrained=True) 
+for count, (batch, coords) in tqdm(enumerate(loader), total=len(loader)):
+    with torch.no_grad(): 
+        features = model(batch).numpy()
 ```
-from wsi_core.dataset_h5 import Whole_Slide_Bag
-
-
 
 ## Reference
 Please cite the [paper of the original authors](https://www.nature.com/articles/s41551-020-00682-w):
