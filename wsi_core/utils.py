@@ -108,8 +108,10 @@ def collate_MIL(batch):
     return [img, label]
 
 
-def collate_features(batch):
+def collate_features(batch, with_coords: bool = False):
     img = torch.cat([item[0] for item in batch], dim=0)
+    if not with_coords:
+        return img
     coords = np.vstack([item[1] for item in batch])
     return [img, coords]
 

@@ -11,7 +11,7 @@ import openslide
 from PIL import Image
 import h5py
 
-from .wsi_utils import (
+from wsi_core.wsi_utils import (
     savePatchIter_bag_hdf5,
     initialize_hdf5_bag,
     save_hdf5,
@@ -20,15 +20,15 @@ from .wsi_utils import (
     isWhitePatch,
     to_percentiles,
 )
-from .util_classes import (
+from wsi_core.util_classes import (
     isInContourV1,
     isInContourV2,
     isInContourV3_Easy,
     isInContourV3_Hard,
     Contour_Checking_fn,
 )
-from .file_utils import load_pkl, save_pkl
-from .utils import Path
+from wsi_core.file_utils import load_pkl, save_pkl
+from wsi_core.utils import Path
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -398,14 +398,15 @@ class WholeSlideImage(object):
         )
         return dataset
 
-    def as_data_loader(self, batch_size: int = 128, **kwargs):
+    def as_data_loader(self, batch_size: int = 128, with_coords: bool = False, **kwargs):
+        from functools import partial
         from wsi_core.utils import collate_features
         from torch.utils.data import DataLoader
 
+        collate = partial(collate_features, with_coords=with_coords)
+
         dataset = self.as_tile_bag()
-        loader = DataLoader(
-            dataset=dataset, batch_size=batch_size, collate_fn=collate_features
-        )
+        loader = DataLoader(dataset=dataset, batch_size=batch_size, collate_fn=collate)
         return loader
 
     def _getPatchGenerator(
@@ -670,7 +671,7 @@ class WholeSlideImage(object):
                         ).convert("RGB")
                     )
         else:
-            raise ValueError("WholeSlideImage does not have a tiles yet.")
+            raise ValueError("WholeSlideImage does not have tiles yet.")
 
     def save_tile_images(
         self,
