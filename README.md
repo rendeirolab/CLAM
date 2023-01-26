@@ -44,9 +44,17 @@ slide.initSegmentation()
 slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
 
 # Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
-slide.createPatches_bag_hdf5(patch_size=224, step_size=224)
+# # Only store coordinates in hdf5 file:
+slide.process_contours('.', patch_level=0, patch_size=224, step_size=224)
+# # Store coordinates and images in hdf5 file:
+slide.createPatches_bag_hdf5(patch_level=0, patch_size=224, step_size=224)
+
+# Get coordinates
 slide.get_tile_coordinates()
+# Get images
 slide.get_tile_images()
+# Get single tile using lower level OpenSlide handle
+slide.wsi.read_region((1_000, 2_000), level=0, size=(224, 224))
 
 # Use in a torch dataloader
 loader = slide.as_data_loader()

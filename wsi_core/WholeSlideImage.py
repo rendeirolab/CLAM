@@ -613,10 +613,14 @@ class WholeSlideImage(object):
         return self.hdf5_file
 
     def has_tile_coords(self):
+        if not self.hdf5_file.exists():
+            return False
         with h5py.File(self.hdf5_file) as h5:
             return "coords" in h5
 
     def has_tile_images(self):
+        if not self.hdf5_file.exists():
+            return False
         with h5py.File(self.hdf5_file) as h5:
             return "imgs" in h5
 
