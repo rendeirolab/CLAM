@@ -10,6 +10,20 @@ The purpose of the fork is to compartimentalize the features related with proces
 
 The package has been renamed to `wsi_core` as that was the name of the module related with whole slide image processing.
 
+
+## Installation
+
+While the repository is private, make sure you [exchange SSH keys of the machine with Github.com](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
+
+Then simply install with `pip`:
+```bash
+git clone git@github.com:rendeirolab/CLAM.git
+cd CLAM
+pip install .
+```
+
+Note that the package uses setuptols-scm for version control and therefore the installation source needs to be a git repository (a zip file of source code won't work).
+
 ## Usage
 
 ```python
