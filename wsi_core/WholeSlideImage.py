@@ -603,6 +603,14 @@ class WholeSlideImage(object):
                 step_size,
                 **kwargs,
             )
+
+            # For serialization as HDF5, convert Path objects to string:
+            if "coords" in attr_dict:
+                if not isinstance(attr_dict["coords"]["save_path"], str):
+                    attr_dict["coords"]["save_path"] = str(
+                        attr_dict["coords"]["save_path"]
+                    )
+
             if len(asset_dict) > 0:
                 if init:
                     save_hdf5(save_path_hdf5, asset_dict, attr_dict, mode="w")
