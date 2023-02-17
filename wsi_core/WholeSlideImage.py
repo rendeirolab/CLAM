@@ -3,6 +3,7 @@ import math
 import os
 import time
 from xml.dom import minidom
+import typing as tp
 
 import cv2
 import matplotlib.pyplot as plt
@@ -34,14 +35,20 @@ Image.MAX_IMAGE_PIXELS = 933120000
 
 
 class WholeSlideImage(object):
-    def __init__(self, path: Path | str):
+    def __init__(
+        self,
+        path: Path | str,
+        attributes: tp.Optional[dict[str, tp.Any]] = None,
+    ):
         """
         Args:
             path (str): fullpath to WSI file
+            attributes
         """
         if isinstance(path, str):
             path = Path(path)
         self.path = path
+        self.attributes = attributes
         self.name = path.stem
         self.wsi = openslide.open_slide(path)
         self.level_downsamples = self._assertLevelDownsamples()
@@ -692,10 +699,10 @@ class WholeSlideImage(object):
             assert frac is None, "Only one of `n` or `frac` can be used."
         if frac is not None:
             assert n is None, "Only one of `n` or `frac` can be used."
+
+        _attributes = {}
         if attributes:
-            assert hasattr(
-                self, "attributes"
-            ), "If `attributes`, then a dictionary named `attributes` must be set."
+            _attributes = self.attributes if self.attributes is not None else {}
 
         hdf5_file = self.hdf5_file  # or self.tile_h5
         level, size = self.get_tile_coordinate_level_size(hdf5_file)
@@ -708,9 +715,7 @@ class WholeSlideImage(object):
 
         sel = pd.Series(range(nc)).sample(frac=frac, n=n).values
 
-        output_prefix = output_dir / (
-            self.name + ("." + ".".join(self.attributes.values()) if attributes else "")
-        )
+        output_prefix = output_dir / (self.name + ("." + ".".join(_attributes.values())))
         for coord in coords[sel]:
             # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.format
             fp = output_prefix + f".{coord[0]}.{coord[1]}.{format}"
