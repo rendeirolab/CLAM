@@ -35,7 +35,6 @@ Image.MAX_IMAGE_PIXELS = 933120000
 
 class WholeSlideImage(object):
     def __init__(self, path: Path | str):
-
         """
         Args:
             path (str): fullpath to WSI file
@@ -257,7 +256,6 @@ class WholeSlideImage(object):
         seg_display=True,
         annot_display=True,
     ):
-
         downsample = self.level_downsamples[vis_level]
         scale = [1 / downsample[0], 1 / downsample[1]]
 
@@ -489,7 +487,6 @@ class WholeSlideImage(object):
         count = 0
         for y in range(start_y, stop_y, step_size_y):
             for x in range(start_x, stop_x, step_size_x):
-
                 if not self.isInContours(
                     cont_check_fn,
                     (x, y),
@@ -623,51 +620,47 @@ class WholeSlideImage(object):
     def has_tile_coords(self):
         if not self.hdf5_file.exists():
             return False
-        with h5py.File(self.hdf5_file) as h5:
+        with h5py.File(self.hdf5_file, "r") as h5:
             return "coords" in h5
 
     def has_tile_images(self):
         if not self.hdf5_file.exists():
             return False
-        with h5py.File(self.hdf5_file) as h5:
+        with h5py.File(self.hdf5_file, "r") as h5:
             return "imgs" in h5
 
     def get_tile_coordinates(self, hdf5_file: Path = None):
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
-        with h5py.File(hdf5_file) as h5:
+        with h5py.File(hdf5_file, "r") as h5:
             return h5["coords"][()]
 
     def get_tile_coordinate_level_size(self, hdf5_file: Path = None) -> tuple[int, int]:
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
-        with h5py.File(hdf5_file) as h5:
+        with h5py.File(hdf5_file, "r") as h5:
             attrs = h5["coords"].attrs
             return attrs["patch_level"], attrs["patch_size"]
 
     def get_tile_images(
         self,
         hdf5_file: Path = None,
-        as_generator: bool = False,
+        as_generator: bool = True,
     ):
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
 
         if self.has_tile_images():
             print("Returning from HDF5 images.")
-            with h5py.File(hdf5_file) as h5:
+            with h5py.File(hdf5_file, "r") as h5:
                 if as_generator:
-                    print("Returning generator.")
-                    raise NotImplementedError(
-                        "Yielding from tiled images in a HDF5 file still not implemented."
-                    )
-                    # # Read up on how to return a yield from on a context manager
-                    # # Maybe it is not possible to return a single item from a hdf5 without reading the whole thing?
-                    # yield from h5["imgs"][()]
+                    for idx in h5["imgs"].iter_chunks():
+                        img = h5["imgs"][idx]
+                        yield img
                 else:
                     return h5["imgs"][()]
         elif self.has_tile_coords():
-            print("Returning from tiles.")
+            print("Returning tiles from coordinates.")
             level, size = self.get_tile_coordinate_level_size(hdf5_file)
             coords = self.get_tile_coordinates(hdf5_file=hdf5_file)
             if not as_generator:
@@ -675,13 +668,13 @@ class WholeSlideImage(object):
                     list(self.get_tile_images(hdf5_file, as_generator=True))
                 )
             else:
-                print("Returning generator.")
                 for coord in coords:
-                    yield np.asarray(
+                    img = np.asarray(
                         self.wsi.read_region(
                             coord, level=level, size=(size, size)
                         ).convert("RGB")
                     )
+                    yield img
         else:
             raise ValueError("WholeSlideImage does not have tiles yet.")
 
@@ -870,7 +863,6 @@ class WholeSlideImage(object):
         custom_downsample=1,
         cmap="coolwarm",
     ):
-
         """
         Args:
             scores (numpy array of float): Attention scores
@@ -1021,7 +1013,6 @@ class WholeSlideImage(object):
             score = scores[idx]
             coord = coords[idx]
             if score >= threshold:
-
                 # attention block
                 raw_block = overlay[
                     coord[1] : coord[1] + patch_size[1],
