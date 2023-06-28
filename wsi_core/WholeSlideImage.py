@@ -56,8 +56,8 @@ class WholeSlideImage(object):
 
         self.contours_tissue = None
         self.contours_tumor = None
-        self.mask_file: Path = path.replace_(".svs", ".segmentation.pickle")
-        self.hdf5_file: Path = path.replace_(".svs", ".h5")
+        self.mask_file: Path = path.with_suffix(".segmentation.pickle")
+        self.hdf5_file: Path = path.with_suffix(".h5")
 
         self.target = None
 
@@ -581,12 +581,16 @@ class WholeSlideImage(object):
         return level_downsamples
 
     def process_contours(
-        self, save_path, patch_level=0, patch_size=256, step_size=256, **kwargs
+        self,
+        save_path: tp.Optional[Path] = None,
+        patch_level=0,
+        patch_size=256,
+        step_size=256,
+        **kwargs,
     ):
-        save_path_hdf5 = os.path.join(save_path, str(self.name) + ".h5")
-        print(
-            "Creating patches for: ",
-            self.name,
+        if save_path is None:
+            save_path = self.hdf5_file
+        # print("Creating patches for: ", self.name, "...")
             "...",
         )
         elapsed = time.time()
@@ -602,7 +606,7 @@ class WholeSlideImage(object):
                 cont,
                 self.holes_tissue[idx],
                 patch_level,
-                save_path,
+                save_path.as_posix(),
                 patch_size,
                 step_size,
                 **kwargs,
