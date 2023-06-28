@@ -434,8 +434,8 @@ class WholeSlideImage(object):
             if cont is not None
             else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
         )
-        print("Bounding Box:", start_x, start_y, w, h)
-        print("Contour Area:", cv2.contourArea(cont))
+        # print("Bounding Box:", start_x, start_y, w, h)
+        # print("Contour Area:", cv2.contourArea(cont))
 
         if custom_downsample > 1:
             assert custom_downsample == 2
@@ -591,11 +591,9 @@ class WholeSlideImage(object):
         if save_path is None:
             save_path = self.hdf5_file
         # print("Creating patches for: ", self.name, "...")
-            "...",
-        )
         elapsed = time.time()
         n_contours = len(self.contours_tissue)
-        print("Total number of contours to process: ", n_contours)
+        # print("Total number of contours to process: ", n_contours)
         fp_chunk_size = math.ceil(n_contours * 0.05)
         init = True
         for idx, cont in enumerate(self.contours_tissue):
@@ -621,12 +619,36 @@ class WholeSlideImage(object):
 
             if len(asset_dict) > 0:
                 if init:
-                    save_hdf5(save_path_hdf5, asset_dict, attr_dict, mode="w")
+                    save_hdf5(save_path, asset_dict, attr_dict, mode="w")
                     init = False
                 else:
-                    save_hdf5(save_path_hdf5, asset_dict, mode="a")
+                    save_hdf5(save_path, asset_dict, mode="a")
 
         return self.hdf5_file
+
+    def segment(
+        self,
+        level: tp.Optional[int] = None,
+        params: tp.Optional[dict[str, tp.Any]] = None,
+    ):
+        import pandas as pd
+
+        if level is None:
+            g = np.absolute(
+                (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
+            ).sum(1)
+            level = np.argmin(g)
+
+        if params is None:
+            url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
+            params = pd.read_csv(url).squeeze().to_dict()
+        self.segmentTissue(seg_level=level, filter_params=params)
+        self.saveSegmentation()
+
+    def tile(self, patch_level: int = 0, patch_size: int = 224, step_size: int = 224):
+        self.process_contours(
+            patch_level=patch_level, patch_size=patch_size, step_size=step_size
+        )
 
     def has_tile_coords(self):
         if not self.hdf5_file.exists():
@@ -762,8 +784,8 @@ class WholeSlideImage(object):
             stop_y = min(start_y + h, img_h - ref_patch_size[1] + 1)
             stop_x = min(start_x + w, img_w - ref_patch_size[0] + 1)
 
-        print("Bounding Box:", start_x, start_y, w, h)
-        print("Contour Area:", cv2.contourArea(cont))
+        # print("Bounding Box:", start_x, start_y, w, h)
+        # print("Contour Area:", cv2.contourArea(cont))
 
         if bot_right is not None:
             stop_y = min(bot_right[1], stop_y)
@@ -820,7 +842,7 @@ class WholeSlideImage(object):
         pool.close()
         results = np.array([result for result in results if result is not None])
 
-        print("Extracted {} coordinates".format(len(results)))
+        # print("Extracted {} coordinates".format(len(results)))
 
         if len(results) > 1:
             asset_dict = {"coords": results}

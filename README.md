@@ -52,6 +52,8 @@ url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biop
 params = pd.read_csv(url).squeeze()
 slide.segmentTissue(seg_level=2, filter_params=params.to_dict())
 slide.saveSegmentation()
+# # alternatively, simply:
+slide.segment()
 
 # Visualize segmentation
 slide.initSegmentation()
@@ -60,6 +62,8 @@ slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
 # Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
 # # Only store coordinates in hdf5 file:
 slide.process_contours('.', patch_level=0, patch_size=224, step_size=224)
+# # alternatively, simply:
+slide.tile()
 # # Store coordinates and images in hdf5 file:
 slide.createPatches_bag_hdf5(patch_level=0, patch_size=224, step_size=224)
 
