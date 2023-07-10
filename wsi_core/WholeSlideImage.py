@@ -29,7 +29,7 @@ from wsi_core.util_classes import (
     Contour_Checking_fn,
 )
 from wsi_core.file_utils import load_pkl, save_pkl
-from wsi_core.utils import Path
+from wsi_core.utils import Path, filter_kwargs_by_callable
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -229,6 +229,10 @@ class WholeSlideImage(object):
         contours, hierarchy = cv2.findContours(
             img_otsu, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
         )  # Find contours
+        if contours == ():
+            self.contours_tissue = []
+            self.holes_tissue = []
+            return
         hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
         if filter_params:
             foreground_contours, hole_contours = _filter_contours(
@@ -626,14 +630,50 @@ class WholeSlideImage(object):
 
         return self.hdf5_file
 
+    def segment_tissue_manual(self):
+        import skimage
+
+        # Work with thubnail by default
+        a = np.asarray(self.visWSI(-1))
+        t = np.asarray(self.wsi.get_thumbnail(a.shape[:-1][::-1])).mean(-1)
+
+        # Threshold
+        m = t < skimage.filters.threshold_otsu(t)
+
+        # Dilate mask
+        m = skimage.morphology.dilation(m, skimage.morphology.disk(2))
+
+        # Remove small objects
+        m = skimage.morphology.remove_small_objects(m, 500, connectivity=1)
+
+        # Fill holes (could use for self.holes_tissue...)
+        m = ~skimage.morphology.remove_small_objects(~m, m.size // 2, connectivity=1)
+
+        # Get polygon contours from binary mask
+        contours = skimage.measure.find_contours(m, 0.5, fully_connected="high")
+
+        # Scale it up to size of original image
+        contours = [
+            np.array(cont * self.level_downsamples[-1], dtype="int32")
+            for cont in contours
+        ]
+
+        self.contours_tissue = contours
+        self.holes_tissue = [[]] * len(contours)  # TODO: return tissue holes
+        self.saveSegmentation()
+
     def segment(
         self,
         level: tp.Optional[int] = None,
         params: tp.Optional[dict[str, tp.Any]] = None,
-    ):
-        import pandas as pd
+        method: str = "CLAM",
+    ) -> None:
+        if method == "manual":
+            assert params is None, "Manual segmentation does not accept parameters."
+            self.segment_tissue_manual()
+            return
 
-        if level is None:
+        assert method == "CLAM", f"Unknown segmentation method: {method}"
             g = np.absolute(
                 (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
             ).sum(1)
@@ -645,7 +685,36 @@ class WholeSlideImage(object):
         self.segmentTissue(seg_level=level, filter_params=params)
         self.saveSegmentation()
 
-    def tile(self, patch_level: int = 0, patch_size: int = 224, step_size: int = 224):
+    def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
+        from shapely.geometry import Polygon
+
+        if output_file is None:
+            output_file = self.path.with_suffix(".segmentation.png")
+
+        a = np.asarray(self.visWSI(-1))
+        thumbnail = np.asarray(self.wsi.get_thumbnail(a.shape[:-1][::-1]))
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        ax.imshow(thumbnail)
+        for i, piece in enumerate(self.contours_tissue or [], 1):
+            # resize to thumbnail size
+            piece = np.array(piece / self.level_downsamples[-1], dtype="int32")
+            poly = Polygon(piece)
+            ax.plot(*piece.T[::-1])
+            ax.text(
+                *poly.centroid.coords[0][::-1],
+                str(i),
+                color="black",
+                ha="center",
+                va="center",
+                fontsize=10,
+            )
+        ax.axis("off")
+        fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
+
+    def tile(
+        self, patch_level: int = 0, patch_size: int = 224, step_size: int = 224
+    ) -> None:
         self.process_contours(
             patch_level=patch_level, patch_size=patch_size, step_size=step_size
         )

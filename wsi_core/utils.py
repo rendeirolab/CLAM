@@ -102,6 +102,16 @@ class SubsetSequentialSampler(Sampler):
         return len(self.indices)
 
 
+def filter_kwargs_by_callable(
+    kwargs: tp.Dict[str, tp.Any], callabl: tp.Callable, exclude: tp.List[str] = None
+) -> tp.Dict[str, tp.Any]:
+    """Filter a dictionary keeping only the keys which are part of a function signature."""
+    from inspect import signature
+
+    args = signature(callabl).parameters.keys()
+    return {k: v for k, v in kwargs.items() if (k in args) and k not in (exclude or [])}
+
+
 def collate_MIL(batch):
     img = torch.cat([item[0] for item in batch], dim=0)
     label = torch.LongTensor([item[1] for item in batch])
@@ -252,7 +262,6 @@ def generate_split(
             all_val_ids.extend(val_ids)
 
             if custom_test_ids is None:  # sample test split
-
                 test_ids = np.random.choice(remaining_ids, test_num[c], replace=False)
                 remaining_ids = np.setdiff1d(remaining_ids, test_ids)
                 all_test_ids.extend(test_ids)
