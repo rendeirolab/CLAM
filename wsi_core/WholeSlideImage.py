@@ -128,6 +128,9 @@ class WholeSlideImage(object):
         self.holes_tissue = asset_dict["holes"]
         self.contours_tissue = asset_dict["tissue"]
 
+    def load_segmentation(self, mask_file: Path | str = None):
+        self.initSegmentation(mask_file)
+
     def saveSegmentation(self, mask_file: Path | str = None):
         if mask_file is None:
             mask_file = self.mask_file
@@ -632,13 +635,16 @@ class WholeSlideImage(object):
 
     def segment_tissue_manual(self):
         import skimage
+        import scipy.ndimage as ndi
 
         # Work with thubnail by default
-        a = np.asarray(self.visWSI(-1))
-        t = np.asarray(self.wsi.get_thumbnail(a.shape[:-1][::-1])).mean(-1)
+        level = self.wsi.level_count - 1
+        thumbnail = np.array(
+            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+        ).mean(-1)
 
         # Threshold
-        m = t < skimage.filters.threshold_otsu(t)
+        m = thumbnail < skimage.filters.threshold_otsu(thumbnail)
 
         # Dilate mask
         m = skimage.morphology.dilation(m, skimage.morphology.disk(2))
@@ -646,20 +652,31 @@ class WholeSlideImage(object):
         # Remove small objects
         m = skimage.morphology.remove_small_objects(m, 500, connectivity=1)
 
-        # Fill holes (could use for self.holes_tissue...)
-        m = ~skimage.morphology.remove_small_objects(~m, m.size // 2, connectivity=1)
-
+        # Fill holes (for contour)
+        mask = ~skimage.morphology.remove_small_objects(~m, m.size // 2, connectivity=1)
         # Get polygon contours from binary mask
-        contours = skimage.measure.find_contours(m, 0.5, fully_connected="high")
+        contours_tissue = skimage.measure.find_contours(mask, 0.5, fully_connected="high")
 
-        # Scale it up to size of original image
-        contours = [
-            np.array(cont * self.level_downsamples[-1], dtype="int32")
-            for cont in contours
+        # Get holes
+        holes, _ = ndi.label(~m)
+        # # remove largest one (which should be the background)
+        holes[holes == 1] = 0
+        holes = skimage.morphology.remove_small_objects(holes, 50, connectivity=1)
+        holes_tissue = skimage.measure.find_contours(holes, 0.5, fully_connected="high")
+
+        # Scale up to size of original image
+        # # Reverse axis order
+        contours_tissue = [
+            np.array(cont * self.wsi.level_downsamples[level], dtype="int32").T[::-1].T
+            for cont in contours_tissue
+        ]
+        holes_tissue = [
+            np.array(cont * self.wsi.level_downsamples[level], dtype="int32").T[::-1].T
+            for cont in holes_tissue
         ]
 
-        self.contours_tissue = contours
-        self.holes_tissue = [[]] * len(contours)  # TODO: return tissue holes
+        self.contours_tissue = contours_tissue
+        self.holes_tissue = holes_tissue
         self.saveSegmentation()
 
     def segment(
@@ -691,24 +708,33 @@ class WholeSlideImage(object):
         if output_file is None:
             output_file = self.path.with_suffix(".segmentation.png")
 
-        a = np.asarray(self.visWSI(-1))
-        thumbnail = np.asarray(self.wsi.get_thumbnail(a.shape[:-1][::-1]))
+        level = self.wsi.level_count - 1
+        thumbnail = np.array(
+            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+        )
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         ax.imshow(thumbnail)
-        for i, piece in enumerate(self.contours_tissue or [], 1):
+        tissue: np.ndarray
+        hole: np.ndarray
+        for i, tissue in enumerate(self.contours_tissue or [], 1):
             # resize to thumbnail size
-            piece = np.array(piece / self.level_downsamples[-1], dtype="int32")
-            poly = Polygon(piece)
-            ax.plot(*piece.T[::-1])
+            tissue = np.array(tissue / self.wsi.level_downsamples[level], dtype="int32")
+            poly = Polygon(tissue)
+            ax.plot(*tissue.T)
             ax.text(
-                *poly.centroid.coords[0][::-1],
+                *poly.centroid.coords[0],
                 str(i),
                 color="black",
                 ha="center",
                 va="center",
                 fontsize=10,
             )
+        for i, hole in enumerate(self.holes_tissue or [], 1):
+            # resize to thumbnail size
+            hole = np.array(hole / self.wsi.level_downsamples[level], dtype="int32")
+            poly = Polygon(hole)
+            ax.plot(*hole.T, color="black", linestyle="-", linewidth=0.2)
         ax.axis("off")
         fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
 
