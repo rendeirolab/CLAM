@@ -39,6 +39,8 @@ class WholeSlideImage(object):
         self,
         path: Path | str,
         attributes: tp.Optional[dict[str, tp.Any]] = None,
+        mask_file: Path | None = None,
+        hdf5_file: Path | None = None,
     ):
         """
         Args:
@@ -54,10 +56,14 @@ class WholeSlideImage(object):
         self.level_downsamples = self._assertLevelDownsamples()
         self.level_dim = self.wsi.level_dimensions
 
-        self.contours_tissue = None
-        self.contours_tumor = None
-        self.mask_file: Path = path.with_suffix(".segmentation.pickle")
-        self.hdf5_file: Path = path.with_suffix(".h5")
+        self.contours_tissue: list[np.ndarray] | None = None
+        self.contours_tumor: list[np.ndarray] | None = None
+        self.holes_tissue: list[np.ndarray] | None = None
+        self.holes_tumor: list[np.ndarray] | None = None
+        self.mask_file: Path = (
+            path.with_suffix(".segmentation.pickle") if mask_file is None else mask_file
+        )
+        self.hdf5_file: Path = path.with_suffix(".h5") if hdf5_file is None else hdf5_file
 
         self.target = None
 
@@ -120,7 +126,7 @@ class WholeSlideImage(object):
             self.contours_tumor, key=cv2.contourArea, reverse=True
         )
 
-    def initSegmentation(self, mask_file: Path | str = None):
+    def initSegmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
             mask_file = self.mask_file
         # load segmentation results from pickle file
@@ -128,10 +134,10 @@ class WholeSlideImage(object):
         self.holes_tissue = asset_dict["holes"]
         self.contours_tissue = asset_dict["tissue"]
 
-    def load_segmentation(self, mask_file: Path | str = None):
+    def load_segmentation(self, mask_file: Path | str | None = None):
         self.initSegmentation(mask_file)
 
-    def saveSegmentation(self, mask_file: Path | str = None):
+    def saveSegmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
             mask_file = self.mask_file
         # save segmentation results using pickle
@@ -675,8 +681,8 @@ class WholeSlideImage(object):
             for cont in holes_tissue
         ]
 
-        self.contours_tissue = contours_tissue
-        self.holes_tissue = holes_tissue
+        self.contours_tissue = [x[:, np.newaxis, :] for x in contours_tissue]
+        self.holes_tissue = [x[:, np.newaxis, :] for x in holes_tissue]
         self.saveSegmentation()
 
     def segment(
@@ -706,7 +712,7 @@ class WholeSlideImage(object):
         from shapely.geometry import Polygon
 
         if output_file is None:
-            output_file = self.path.with_suffix(".segmentation.png")
+            output_file = self.mask_file.with_suffix(".png")
 
         level = self.wsi.level_count - 1
         thumbnail = np.array(
@@ -719,7 +725,9 @@ class WholeSlideImage(object):
         hole: np.ndarray
         for i, tissue in enumerate(self.contours_tissue or [], 1):
             # resize to thumbnail size
-            tissue = np.array(tissue / self.wsi.level_downsamples[level], dtype="int32")
+            tissue = np.array(
+                tissue.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
+            )
             poly = Polygon(tissue)
             ax.plot(*tissue.T)
             ax.text(
@@ -732,18 +740,56 @@ class WholeSlideImage(object):
             )
         for i, hole in enumerate(self.holes_tissue or [], 1):
             # resize to thumbnail size
-            hole = np.array(hole / self.wsi.level_downsamples[level], dtype="int32")
+            hole = np.array(
+                hole.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
+            )
             poly = Polygon(hole)
             ax.plot(*hole.T, color="black", linestyle="-", linewidth=0.2)
         ax.axis("off")
         fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
+        plt.close(fig)
 
     def tile(
-        self, patch_level: int = 0, patch_size: int = 224, step_size: int = 224
+        self,
+        patch_level: int = 0,
+        patch_size: int = 224,
+        step_size: int = 224,
+        contour_subset: list[int] | None = None,
     ) -> None:
+        """
+        Tile the WSI.
+
+        Parameters
+        ----------
+        patch_level: int
+            Level to extract patches from.
+        patch_size: int
+            Size of patches to extract.
+        step_size: int
+            Step size between patches.
+        contour_subset: list[int]
+            1-based index of which contours to use. If None, use all contours.
+
+        Returns
+        -------
+        None
+        """
+        from copy import deepcopy as copy
+
+        if contour_subset is not None:
+            original_contours = copy(self.contours_tissue)
+            original_holes = copy(self.holes_tissue)
+
+            self.contours_tissue = [self.contours_tissue[i - 1] for i in contour_subset]
+            self.holes_tissue = [self.holes_tissue[i - 1] for i in contour_subset]
+
         self.process_contours(
             patch_level=patch_level, patch_size=patch_size, step_size=step_size
         )
+
+        if contour_subset is not None:
+            self.contours_tissue = original_contours
+            self.holes_tissue = original_holes
 
     def has_tile_coords(self):
         if not self.hdf5_file.exists():
@@ -757,13 +803,15 @@ class WholeSlideImage(object):
         with h5py.File(self.hdf5_file, "r") as h5:
             return "imgs" in h5
 
-    def get_tile_coordinates(self, hdf5_file: Path = None):
+    def get_tile_coordinates(self, hdf5_file: Path | None = None):
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file, "r") as h5:
             return h5["coords"][()]
 
-    def get_tile_coordinate_level_size(self, hdf5_file: Path = None) -> tuple[int, int]:
+    def get_tile_coordinate_level_size(
+        self, hdf5_file: Path | None = None
+    ) -> tuple[int, int]:
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file, "r") as h5:
@@ -772,7 +820,7 @@ class WholeSlideImage(object):
 
     def get_tile_images(
         self,
-        hdf5_file: Path = None,
+        hdf5_file: Path | None = None,
         as_generator: bool = True,
     ):
         if hdf5_file is None:
@@ -811,7 +859,7 @@ class WholeSlideImage(object):
         output_dir: Path,
         format: str = "jpg",
         attributes: bool = True,
-        n: int = None,
+        n: int | None = None,
         frac: float = 1.0,
     ):
         import pandas as pd
