@@ -371,7 +371,7 @@ class WholeSlideImage(object):
 
     def createPatches_bag_hdf5(
         self,
-        save_path: Path | str = None,
+        save_path: Path | str | None = None,
         patch_level=0,
         patch_size=256,
         step_size=256,
@@ -639,18 +639,82 @@ class WholeSlideImage(object):
 
         return self.hdf5_file
 
-    def segment_tissue_manual(self):
-        import skimage
-        import scipy.ndimage as ndi
+    def decompose_color(self, output_file: Path | None = None):
+        from skimage.color import rgb2hsv, hsv2rgb, rgb_from_hed
+        from sklearn.decomposition import PCA  # , FastICA
+
+        def minmax_scale(x):
+            return (x - np.min(x)) / (np.max(x) - np.min(x))
+
+        if output_file is None:
+            output_file = self.mask_file.with_suffix(".pca.png")
 
         # Work with thubnail by default
         level = self.wsi.level_count - 1
         thumbnail = np.array(
             self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
-        ).mean(-1)
+        )
 
-        # Threshold
-        m = thumbnail < skimage.filters.threshold_otsu(thumbnail)
+        # Decompose in HSV space
+        x = rgb2hsv(thumbnail / 255).reshape(-1, 3)
+        model = PCA(whiten=True)
+        t = model.fit_transform(x)  # whiten="unit-variance" for FastICA
+        thumbnail_pca = t.reshape(thumbnail.shape)
+
+        # Find out which PC has stain most proximal to H&E
+        # # convert hsv to rgb space
+        pcs = hsv2rgb(model.components_)
+        # # cancel out DAB channel
+        rgb_from_hed[-1] = 0
+        sel = np.absolute(pcs @ rgb_from_hed.T).sum(0)
+        # # guess which 'side' the signal is at
+        sign = 1 if (pcs[np.argmax(sel)][0] > 0) else -1
+
+        # Visualize
+        fig, axes = plt.subplots(4, 1, figsize=(10, 10))
+        axes[0].set(title=f"PC {sel}, argmax: {sel.argmax()}, sign: {sign}")
+        axes[0].imshow(thumbnail)
+        for i in range(3):
+            axes[i + 1].imshow(minmax_scale(thumbnail_pca[..., i]))
+        for ax in axes:
+            ax.axis("off")
+        fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
+        plt.close(fig)
+
+    def segment_tissue_manual(self, level: int | None = None, color_space: str = "RGB"):
+        import skimage
+        import scipy.ndimage as ndi
+
+        assert color_space in ["RGB", "HED"], "color_space must be RGB or HED."
+
+        # Work with thumbnail by default
+        if level is None:
+            # level = self.wsi.level_count - 1
+            # Find level with dimension closest to 2000x2000
+            level = (
+                np.absolute(
+                    np.asarray(self.wsi.level_dimensions) - np.asarray([(2000, 2000)])
+                )
+                .mean(1)
+                .argmin()
+            )
+        thumbnail = np.array(
+            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+        )
+
+        if color_space == "HED":
+            # Work in HED space
+            from skimage.color import rgb2hed
+
+            hed = rgb2hed(thumbnail)
+            thumbnail = hed[..., :-1].min(-1)
+            # Threshold for bright
+            m = thumbnail > skimage.filters.threshold_otsu(thumbnail)
+        elif color_space == "RGB":
+            # Work in mean RGB space
+            thumbnail = thumbnail.mean(-1)
+            # Threshold for dark
+            m = thumbnail < skimage.filters.threshold_otsu(thumbnail)
 
         # Dilate mask
         m = skimage.morphology.dilation(m, skimage.morphology.disk(2))
@@ -687,25 +751,45 @@ class WholeSlideImage(object):
 
     def segment(
         self,
-        level: tp.Optional[int] = None,
         params: tp.Optional[dict[str, tp.Any]] = None,
         method: str = "CLAM",
     ) -> None:
         if method == "manual":
-            assert params is None, "Manual segmentation does not accept parameters."
-            self.segment_tissue_manual()
+            self.segment_tissue_manual(**params)
             return
 
         assert method == "CLAM", f"Unknown segmentation method: {method}"
+        # import pandas as pd
+        if params is None:
+            # url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
+            # params = pd.read_csv(url).squeeze().to_dict()
+            params = {
+                "sthresh": 15,
+                "mthresh": 11,
+                "close": 2,
+                "use_otsu": False,
+                "a_t": 1,
+                "a_h": 1,
+                "max_n_holes": 2,
+                "vis_level": -1,
+                "line_thickness": 50,
+                "white_thresh": 5,
+                "black_thresh": 50,
+                "use_padding": True,
+                "contour_fn": "four_pt",
+                "keep_ids": "none",
+                "exclude_ids": "none",
+            }
+
+        if "seg_level" not in params:
             g = np.absolute(
                 (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
             ).sum(1)
-            level = np.argmin(g)
+            params["seg_level"] = np.argmin(g)
 
-        if params is None:
-            url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
-            params = pd.read_csv(url).squeeze().to_dict()
-        self.segmentTissue(seg_level=level, filter_params=params)
+        kwargs = filter_kwargs_by_callable(params, self.segmentTissue)
+        fkwargs = {k: v for k, v in params.items() if k not in kwargs}
+        self.segmentTissue(**kwargs, filter_params=fkwargs)
         self.saveSegmentation()
 
     def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
@@ -778,10 +862,7 @@ class WholeSlideImage(object):
 
         if contour_subset is not None:
             original_contours = copy(self.contours_tissue)
-            original_holes = copy(self.holes_tissue)
-
             self.contours_tissue = [self.contours_tissue[i - 1] for i in contour_subset]
-            self.holes_tissue = [self.holes_tissue[i - 1] for i in contour_subset]
 
         self.process_contours(
             patch_level=patch_level, patch_size=patch_size, step_size=step_size
@@ -789,7 +870,6 @@ class WholeSlideImage(object):
 
         if contour_subset is not None:
             self.contours_tissue = original_contours
-            self.holes_tissue = original_holes
 
     def has_tile_coords(self):
         if not self.hdf5_file.exists():
