@@ -832,6 +832,7 @@ class WholeSlideImage(object):
         ax.axis("off")
         fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
         plt.close(fig)
+        return fig
 
     def tile(
         self,
@@ -907,7 +908,7 @@ class WholeSlideImage(object):
             hdf5_file = self.hdf5_file  # or self.tile_h5
 
         if self.has_tile_images():
-            print("Returning from HDF5 images.")
+            # print("Returning from HDF5 images.")
             with h5py.File(hdf5_file, "r") as h5:
                 if as_generator:
                     for idx in h5["imgs"].iter_chunks():
@@ -916,7 +917,7 @@ class WholeSlideImage(object):
                 else:
                     return h5["imgs"][()]
         elif self.has_tile_coords():
-            print("Returning tiles from coordinates.")
+            # print("Returning tiles from coordinates.")
             level, size = self.get_tile_coordinate_level_size(hdf5_file)
             coords = self.get_tile_coordinates(hdf5_file=hdf5_file)
             if not as_generator:
