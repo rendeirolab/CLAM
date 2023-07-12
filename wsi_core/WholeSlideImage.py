@@ -755,7 +755,7 @@ class WholeSlideImage(object):
         method: str = "CLAM",
     ) -> None:
         if method == "manual":
-            self.segment_tissue_manual(**params)
+            self.segment_tissue_manual(**(params or {}))
             return
 
         assert method == "CLAM", f"Unknown segmentation method: {method}"
