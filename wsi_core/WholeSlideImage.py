@@ -4,6 +4,7 @@ import os
 import time
 from xml.dom import minidom
 import typing as tp
+from pathlib import Path as _Path
 
 import cv2
 import matplotlib.pyplot as plt
@@ -37,7 +38,7 @@ Image.MAX_IMAGE_PIXELS = 933120000
 class WholeSlideImage(object):
     def __init__(
         self,
-        path: Path | str,
+        path: Path | _Path | str,
         attributes: tp.Optional[dict[str, tp.Any]] = None,
         mask_file: Path | None = None,
         hdf5_file: Path | None = None,
@@ -47,7 +48,7 @@ class WholeSlideImage(object):
             path (str): fullpath to WSI file
             attributes
         """
-        if isinstance(path, str):
+        if not isinstance(path, Path):
             path = Path(path)
         self.path = path
         self.attributes = attributes
@@ -424,7 +425,9 @@ class WholeSlideImage(object):
         collate = partial(collate_features, with_coords=with_coords)
 
         dataset = self.as_tile_bag()
-        loader = DataLoader(dataset=dataset, batch_size=batch_size, collate_fn=collate)
+        loader = DataLoader(
+            dataset=dataset, batch_size=batch_size, collate_fn=collate, **kwargs
+        )
         return loader
 
     def _getPatchGenerator(
@@ -745,8 +748,13 @@ class WholeSlideImage(object):
             for cont in holes_tissue
         ]
 
+        # TODO: Important! Pair holes and contours by checking which holes are in which tissue pieces
+        # shape of holes_tissue must match contours_tissue, even if there are no holes
+
         self.contours_tissue = [x[:, np.newaxis, :] for x in contours_tissue]
         self.holes_tissue = [x[:, np.newaxis, :] for x in holes_tissue]
+
+        assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
         self.saveSegmentation()
 
     def segment(
@@ -754,85 +762,93 @@ class WholeSlideImage(object):
         params: tp.Optional[dict[str, tp.Any]] = None,
         method: str = "CLAM",
     ) -> None:
+        assert method in ["manual", "CLAM"], f"Unknown segmentation method: {method}"
         if method == "manual":
             self.segment_tissue_manual(**(params or {}))
-            return
+        else:
+            # import pandas as pd
+            if params is None:
+                # url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
+                # params = pd.read_csv(url).squeeze().to_dict()
+                params = {
+                    "sthresh": 15,
+                    "mthresh": 11,
+                    "close": 2,
+                    "use_otsu": False,
+                    "a_t": 1,
+                    "a_h": 1,
+                    "max_n_holes": 2,
+                    "vis_level": -1,
+                    "line_thickness": 50,
+                    "white_thresh": 5,
+                    "black_thresh": 50,
+                    "use_padding": True,
+                    "contour_fn": "four_pt",
+                    "keep_ids": "none",
+                    "exclude_ids": "none",
+                }
 
-        assert method == "CLAM", f"Unknown segmentation method: {method}"
-        # import pandas as pd
-        if params is None:
-            # url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
-            # params = pd.read_csv(url).squeeze().to_dict()
-            params = {
-                "sthresh": 15,
-                "mthresh": 11,
-                "close": 2,
-                "use_otsu": False,
-                "a_t": 1,
-                "a_h": 1,
-                "max_n_holes": 2,
-                "vis_level": -1,
-                "line_thickness": 50,
-                "white_thresh": 5,
-                "black_thresh": 50,
-                "use_padding": True,
-                "contour_fn": "four_pt",
-                "keep_ids": "none",
-                "exclude_ids": "none",
-            }
+            if "seg_level" not in params:
+                g = np.absolute(
+                    (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
+                ).sum(1)
+                params["seg_level"] = np.argmin(g)
 
-        if "seg_level" not in params:
-            g = np.absolute(
-                (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
-            ).sum(1)
-            params["seg_level"] = np.argmin(g)
+            kwargs = filter_kwargs_by_callable(params, self.segmentTissue)
+            fkwargs = {k: v for k, v in params.items() if k not in kwargs}
+            self.segmentTissue(**kwargs, filter_params=fkwargs)
+            assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
+            self.saveSegmentation()
+        self.plot_segmentation()
 
-        kwargs = filter_kwargs_by_callable(params, self.segmentTissue)
-        fkwargs = {k: v for k, v in params.items() if k not in kwargs}
-        self.segmentTissue(**kwargs, filter_params=fkwargs)
-        self.saveSegmentation()
+    # def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
+    #     from shapely.geometry import Polygon
+
+    #     if output_file is None:
+    #         output_file = self.mask_file.with_suffix(".png")
+
+    #     level = self.wsi.level_count - 1
+    #     thumbnail = np.array(
+    #         self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+    #     )
+
+    #     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    #     ax.imshow(thumbnail)
+    #     tissue: np.ndarray
+    #     hole: np.ndarray
+    #     for i, tissue in enumerate(self.contours_tissue or [], 1):
+    #         # resize to thumbnail size
+    #         tissue = np.array(
+    #             tissue.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
+    #         )
+    #         poly = Polygon(tissue)
+    #         ax.plot(*tissue.T)
+    #         ax.text(
+    #             *poly.centroid.coords[0],
+    #             str(i),
+    #             color="black",
+    #             ha="center",
+    #             va="center",
+    #             fontsize=10,
+    #         )
+    #     for i, hole in enumerate(self.holes_tissue or [], 1):
+    #         # resize to thumbnail size
+    #         hole = np.array(
+    #             hole.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
+    #         )
+    #         poly = Polygon(hole)
+    #         ax.plot(*hole.T, color="black", linestyle="-", linewidth=0.2)
+    #     ax.axis("off")
+    #     fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
+    #     plt.close(fig)
+    #     return fig
 
     def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
-        from shapely.geometry import Polygon
-
         if output_file is None:
-            output_file = self.mask_file.with_suffix(".png")
+            output_file = self.path.with_suffix(".segmentation.png")
 
         level = self.wsi.level_count - 1
-        thumbnail = np.array(
-            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
-        )
-
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-        ax.imshow(thumbnail)
-        tissue: np.ndarray
-        hole: np.ndarray
-        for i, tissue in enumerate(self.contours_tissue or [], 1):
-            # resize to thumbnail size
-            tissue = np.array(
-                tissue.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
-            )
-            poly = Polygon(tissue)
-            ax.plot(*tissue.T)
-            ax.text(
-                *poly.centroid.coords[0],
-                str(i),
-                color="black",
-                ha="center",
-                va="center",
-                fontsize=10,
-            )
-        for i, hole in enumerate(self.holes_tissue or [], 1):
-            # resize to thumbnail size
-            hole = np.array(
-                hole.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
-            )
-            poly = Polygon(hole)
-            ax.plot(*hole.T, color="black", linestyle="-", linewidth=0.2)
-        ax.axis("off")
-        fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
-        plt.close(fig)
-        return fig
+        self.visWSI(vis_level=level).save(output_file)
 
     def tile(
         self,

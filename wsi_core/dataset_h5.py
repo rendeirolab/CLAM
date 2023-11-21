@@ -142,10 +142,10 @@ class Whole_Slide_Bag_FP(Dataset):
         for name, value in dset.attrs.items():
             print(name, value)
 
-        print("\nfeature extraction settings")
-        print("target patch size: ", self.target_patch_size)
-        print("pretrained: ", self.pretrained)
-        print("transformations: ", self.roi_transforms)
+        # print("\nfeature extraction settings")
+        # print("target patch size: ", self.target_patch_size)
+        # print("pretrained: ", self.pretrained)
+        # print("transformations: ", self.roi_transforms)
 
     def __getitem__(self, idx):
         with h5py.File(self.file_path, "r") as hdf5_file:
