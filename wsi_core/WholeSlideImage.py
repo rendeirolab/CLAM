@@ -39,14 +39,24 @@ class WholeSlideImage(object):
     def __init__(
         self,
         path: Path | _Path | str,
+        *,
         attributes: tp.Optional[dict[str, tp.Any]] = None,
         mask_file: Path | None = None,
         hdf5_file: Path | None = None,
     ):
         """
-        Args:
-            path (str): fullpath to WSI file
-            attributes
+        WholeSlideImage object for handling WSI.
+
+        Parameters
+        ----------
+        path: Path
+            Path to WSI file.
+        attributes: dict[str, tp.Any]
+            Optional dictionary with attributes to store in the object.
+        mask_file: Path
+            Path to file used to save segmentation. Default is `path.with_suffix(".segmentation.pickle")`.
+        hdf5_file: Path
+            Path to file used to save tile coordinates (and images). Default is `path.with_suffix(".h5")`.
         """
         if not isinstance(path, Path):
             path = Path(path)
@@ -760,8 +770,35 @@ class WholeSlideImage(object):
     def segment(
         self,
         params: tp.Optional[dict[str, tp.Any]] = None,
-        method: str = "CLAM",
+        method: str = "manual",
     ) -> None:
+        """
+        Segment the WSI for tissue and background.
+
+        Segmentations are saved as a list of contours and holes in the
+        `contours_tissue` and `holes_tissue` attributes.
+        This object is then saved to disk as a pickle file, by default
+        in the same directory as the WSI with the same name but with a
+        `.segmentation.pickle` suffix.
+
+        A visualization of the segmentation will also be plotted by
+        calling `plot_segmentation` and saved as a PNG file ( default
+        in the same directory as the WSI with the same name but with a
+        `.segmentation.png` suffix).
+
+        Parameters
+        ----------
+        params: dict[str, tp.Any]
+            Parameters for the segmentation method.
+        method: str
+            Segmentation method to use. Either "manual" or "CLAM".
+            The CLAM method uses the parameters given in `params` or
+            the default parameters (bwh_biopsy) if `params` is None.
+
+        Returns
+        -------
+        None
+        """
         assert method in ["manual", "CLAM"], f"Unknown segmentation method: {method}"
         if method == "manual":
             self.segment_tissue_manual(**(params or {}))
@@ -844,6 +881,22 @@ class WholeSlideImage(object):
     #     return fig
 
     def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
+        """
+        Plot the segmentation of the WSI.
+
+        This plot is an overlay of a low resolution image of the WSI and the
+        contours of the tissue and holes.
+
+        Parameters
+        ----------
+        output_file: Path
+            Path to save the plot to. If None, save to
+            `self.path.with_suffix(".segmentation.png")`.
+
+        Returns
+        -------
+        None
+        """
         if output_file is None:
             output_file = self.path.with_suffix(".segmentation.png")
 
@@ -863,11 +916,12 @@ class WholeSlideImage(object):
         Parameters
         ----------
         patch_level: int
-            Level to extract patches from.
+            WSI level to extract patches from. Default is 0, which a convention
+            for highest resolution, but not always true.
         patch_size: int
-            Size of patches to extract.
+            Size of patches to extract in pixels.
         step_size: int
-            Step size between patches.
+            Step size between patches in pixels.
         contour_subset: list[int]
             1-based index of which contours to use. If None, use all contours.
 
@@ -900,7 +954,22 @@ class WholeSlideImage(object):
         with h5py.File(self.hdf5_file, "r") as h5:
             return "imgs" in h5
 
-    def get_tile_coordinates(self, hdf5_file: Path | None = None):
+    def get_tile_coordinates(self, hdf5_file: Path | None = None) -> np.ndarray:
+        """
+        Retrieve coordinates of tiles from HDF5 file.
+
+        By default uses the `self.hdf5_file` attribute, but can be overridden.
+
+        Parameters
+        ----------
+        hdf5_file: Path
+            Path to HDF5 file containing tile coordinates.
+
+        Returns
+        -------
+        np.ndarray
+            Array of tile coordinates with shape (N, 2).
+        """
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file, "r") as h5:
@@ -919,7 +988,23 @@ class WholeSlideImage(object):
         self,
         hdf5_file: Path | None = None,
         as_generator: bool = True,
-    ):
+    ) -> tp.Generator[np.ndarray, None, None] | np.ndarray:
+        """
+        Get tile images from HDF5 file.
+
+        By default it returns a generator, but can be overridden to return all as a array with batch dimension.
+        By default uses the `self.hdf5_file` attribute, but can be overridden.
+
+        Parameters
+        ----------
+        hdf5_file: Path
+            Path to HDF5 file containing tile images.
+
+        Returns
+        -------
+        np.ndarray
+            Array of tile images with shape (N, 3, H, W).
+        """
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
 
@@ -959,6 +1044,26 @@ class WholeSlideImage(object):
         n: int | None = None,
         frac: float = 1.0,
     ):
+        """
+        Save tile images as individual files to disk.
+
+        Parameters
+        ----------
+        output_dir: Path
+            Directory to save tile images to.
+        format: str
+            File format to save images as.
+        attributes: bool
+            Whether to include attributes in filename.
+        n: int
+            Number of tiles to save. Default is to save all.
+        frac: float
+            Fraction of tiles to save. Default is to save all.
+
+        Returns
+        -------
+        None
+        """
         import pandas as pd
 
         if n is not None:
@@ -966,9 +1071,16 @@ class WholeSlideImage(object):
         if frac is not None:
             assert n is None, "Only one of `n` or `frac` can be used."
 
+        output_dir.mkdir(exist_ok=True, parents=True)
+
         _attributes = {}
         if attributes:
             _attributes = self.attributes if self.attributes is not None else {}
+            output_prefix = output_dir / (
+                self.name + ("." + ".".join(_attributes.values()))
+            )
+        else:
+            output_prefix = output_dir / self.name
 
         hdf5_file = self.hdf5_file  # or self.tile_h5
         level, size = self.get_tile_coordinate_level_size(hdf5_file)
@@ -981,7 +1093,6 @@ class WholeSlideImage(object):
 
         sel = pd.Series(range(nc)).sample(frac=frac, n=n).values
 
-        output_prefix = output_dir / (self.name + ("." + ".".join(_attributes.values())))
         for coord in coords[sel]:
             # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.format
             fp = output_prefix + f".{coord[0]}.{coord[1]}.{format}"

@@ -26,58 +26,60 @@ Note that the package uses setuptols-scm for version control and therefore the i
 
 ## Usage
 
-```python
-import requests
-import pandas as pd
-import torch
-import tqdm
+This package is meant for both interactive use and for use in a pipeline at scale.
+By default actions do not return anything, but instead save the results to disk in files relative to the slide file.
 
+All major functions have sensible defaults but allow for customization.
+Please check the docstring of each function for more information.
+
+```python
 from wsi_core import WholeSlideImage
 from wsi_core.utils import Path
 
 # Get example slide image
-slide_name = "GTEX-1117F-1126"
-slide_file = Path(f"{slide_name}.svs")
+slide_file = Path("GTEX-12ZZW-2726.svs")
 if not slide_file.exists():
-    url = f"https://brd.nci.nih.gov/brd/imagedownload/{slide_name}"
+    import requests
+    url = f"https://brd.nci.nih.gov/brd/imagedownload/{slide_file.stem}"
     with open(slide_file, "wb") as handle:
         req = requests.get(url)
         handle.write(req.content)
 
-# Instantiate slide class
+# Instantiate slide object
 slide = WholeSlideImage(slide_file)
 
-# Segment tissue
-url = "https://raw.githubusercontent.com/mahmoodlab/CLAM/master/presets/bwh_biopsy.csv"
-params = pd.read_csv(url).squeeze()
-slide.segmentTissue(seg_level=2, filter_params=params.to_dict())
-slide.saveSegmentation()
-# # alternatively, simply:
+# Instantiate slide object
+slide = WholeSlideImage(slide_file, attributes=dict(donor="GTEX-12ZZW"))
+
+# Segment tissue (segmentation mask is stored as polygons in slide.contours_tissue)
 slide.segment()
 
-# Visualize segmentation
-slide.initSegmentation()
-slide.visWSI(vis_level=2).save(f"{slide_name}.segmentation.png")
+# Visualize segmentation (PNG file is saved in same directory as slide_file)
+slide.plot_segmentation()
 
 # Generate coordinates for tiling in h5 file (highest resolution, non-overlapping tiles)
-# # Only store coordinates in hdf5 file:
-slide.process_contours('.', patch_level=0, patch_size=224, step_size=224)
-# # alternatively, simply:
 slide.tile()
-# # Store coordinates and images in hdf5 file:
-slide.createPatches_bag_hdf5(patch_level=0, patch_size=224, step_size=224)
 
-# Get coordinates
+# Get coordinates (from h5 file)
 slide.get_tile_coordinates()
-# Get images
-slide.get_tile_images()
-# Get single tile using lower level OpenSlide handle
+
+# Get image of single tile using lower level OpenSlide handle (`wsi` object)
 slide.wsi.read_region((1_000, 2_000), level=0, size=(224, 224))
+
+# Get tile images for all tiles (as a generator)
+images = slide.get_tile_images()
+for img in images:
+    ...
+
+# Save tile images to disk as individual jpg files
+slide.save_tile_images(output_dir=slide_file.parent / (slide_file.stem + "_tiles"))
 
 # Use in a torch dataloader
 loader = slide.as_data_loader()
 
 # Extract features
+import torch
+from tqdm import tqdm
 model = torch.hub.load("pytorch/vision", "resnet50", pretrained=True) 
 for count, (batch, coords) in tqdm(enumerate(loader), total=len(loader)):
     with torch.no_grad(): 
