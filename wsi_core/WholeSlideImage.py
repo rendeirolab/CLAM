@@ -880,7 +880,7 @@ class WholeSlideImage(object):
     #     plt.close(fig)
     #     return fig
 
-    def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
+    def plot_segmentation(self, output_file: tp.Optional[Path] = None, **kwargs) -> None:
         """
         Plot the segmentation of the WSI.
 
@@ -893,6 +893,9 @@ class WholeSlideImage(object):
             Path to save the plot to. If None, save to
             `self.path.with_suffix(".segmentation.png")`.
 
+        kwargs: dict
+            Additional keyword arguments to pass to `visWSI`.
+
         Returns
         -------
         None
@@ -901,7 +904,7 @@ class WholeSlideImage(object):
             output_file = self.path.with_suffix(".segmentation.png")
 
         level = self.wsi.level_count - 1
-        self.visWSI(vis_level=level).save(output_file)
+        self.visWSI(vis_level=level, **kwargs).save(output_file)
 
     def tile(
         self,
