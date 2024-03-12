@@ -440,6 +440,44 @@ class WholeSlideImage(object):
         )
         return loader
 
+    def inference(
+        self,
+        model_name: str,
+        model_repo: str = "pytorch/vision",
+        device: str = "cpu",
+        data_loader_kws: dict = {},
+    ) -> tp.Tuple[np.ndarray, np.ndarray]:
+        """
+        Inference on the WSI using a pretrained model.
+
+        Parameters
+        ----------
+        model_name: str
+            Name of the model to use for inference.
+        model_repo: str
+            Repository to load the model from. Default is "torch/vision".
+        data_loader_kws: dict
+            Keyword arguments to pass to the data loader.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Tuple of (features, coordinates).
+        """
+        import torch
+        from tqdm import tqdm
+
+        data_loader = self.as_data_loader(**data_loader_kws, with_coords=True)
+        model = torch.hub.load(model_repo, model_name, pretrained=True).to(device)
+        model.eval()
+        coords = list()
+        feats = list()
+        for batch, coord in tqdm(data_loader):
+            with torch.no_grad():
+                feats.append(model(batch.to(device)).cpu().numpy())
+                coords.append(coord)
+        return np.concatenate(feats, axis=0), np.concatenate(coords, axis=0)
+
     def _getPatchGenerator(
         self,
         cont,
