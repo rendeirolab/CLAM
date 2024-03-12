@@ -427,7 +427,7 @@ class WholeSlideImage(object):
         )
         return dataset
 
-    def as_data_loader(self, batch_size: int = 128, with_coords: bool = False, **kwargs):
+    def as_data_loader(self, batch_size: int = 32, with_coords: bool = False, **kwargs):
         from functools import partial
         from wsi_core.utils import collate_features
         from torch.utils.data import DataLoader
