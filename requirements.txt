@@ -1,5 +1,6 @@
 requests
 opencv-python
+scikit-image
 h5py
 matplotlib
 numpy
