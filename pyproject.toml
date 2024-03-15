@@ -21,6 +21,7 @@ classifiers = [
 #license = "gpt3"
 requires-python = ">=3.10"
 dependencies = [
+    "requests",
     "opencv-python",
     "h5py",
     "matplotlib",
