@@ -939,11 +939,9 @@ class WholeSlideImage(object):
         _attributes = {}
         if attributes:
             _attributes = self.attributes if self.attributes is not None else {}
-            output_prefix = output_dir / (
-                self.name + ("." + ".".join(_attributes.values()))
-            )
+            output_prefix = self.name + ("." + ".".join(_attributes.values()))
         else:
-            output_prefix = output_dir / self.name
+            output_prefix = self.name
 
         hdf5_file = self.hdf5_file  # or self.tile_h5
         level, size = self.get_tile_coordinate_level_size(hdf5_file)
@@ -958,7 +956,7 @@ class WholeSlideImage(object):
 
         for coord in coords[sel]:
             # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.format
-            fp = output_prefix + f".{coord[0]}.{coord[1]}.{format}"
+            fp = output_dir / (output_prefix + f".{coord[0]}.{coord[1]}.{format}")
             img = self.wsi.read_region(coord, level=level, size=(size, size))
             img.convert("RGB").save(fp)
 
