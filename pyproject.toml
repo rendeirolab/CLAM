@@ -1,6 +1,6 @@
 # PIP, using PEP621
 [project]
-name = "wsi_core"
+name = "wsi"
 authors = [
     {name = "Andre Rendeiro", email = "arendeiro@cemm.at"},
 ]
@@ -11,8 +11,9 @@ keywords = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Development Status :: 3 - Alpha",
     "Typing :: Typed",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
@@ -51,9 +52,9 @@ doc = [
 ]
 
 [project.urls]
-homepage = "https://github.com/rendeirolab/CLAM"
-documentation = "https://github.com/rendeirolab/CLAM/blob/main/README.md"
-repository = "https://github.com/rendeirolab/CLAM"
+homepage = "https://github.com/rendeirolab/wsi"
+documentation = "https://github.com/rendeirolab/wsi/blob/main/README.md"
+repository = "https://github.com/rendeirolab/wsi"
 
 [build-system]
 # requires = ["poetry>=0.12", "setuptools>=45", "wheel", "poetry-dynamic-versioning"]
@@ -62,7 +63,7 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
-write_to = "wsi_core/_version.py"
+write_to = "wsi/_version.py"
 write_to_template = 'version = __version__ = "{version}"'
 
 [tool.black]
@@ -104,7 +105,7 @@ module = [
     'matplotlib.*',
     'networkx.*',
     #
-    'wsi_core.*'
+    'wsi.*'
 ]
 ignore_missing_imports = true
 
@@ -117,5 +118,5 @@ testpaths = [
 ]
 markers = [
     'slow', # 'marks tests as slow (deselect with "-m 'not slow'")',
-    'serial'
+    "wsi"
 ]

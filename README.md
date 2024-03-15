@@ -1,4 +1,4 @@
-CLAM
+WSI
 ====
 This is a fork of the repository from [Mahmood lab's CLAM repository](https://github.com/mahmoodlab/CLAM).
 It is made available under the GPLv3 License and is available for non-commercial academic purposes.
@@ -8,7 +8,7 @@ It is made available under the GPLv3 License and is available for non-commercial
 
 The purpose of the fork is to compartimentalize the features related with processing of whole-slide images (WSI) from the CLAM model.
 
-The package has been renamed to `wsi_core` as that was the name of the module related with whole slide image processing.
+The package has been renamed to `wsi`.
 
 
 ## Installation
@@ -17,14 +17,30 @@ While the repository is private, make sure you [exchange SSH keys of the machine
 
 Then simply install with `pip`:
 ```bash
-git clone git@github.com:rendeirolab/CLAM.git
-cd CLAM
+# pip install git+ssh://git@github.com:rendeirolab/wsi.git
+git clone git@github.com:rendeirolab/wsi.git
+cd wsi
 pip install .
 ```
 
 Note that the package uses setuptols-scm for version control and therefore the installation source needs to be a git repository (a zip file of source code won't work).
 
 ## Usage
+
+The only exposed class is `WholeSlideImage` enables all the functionalities of the package.
+
+### Quick start - segmentation, tiling and feature extraction
+```python
+from wsi import WholeSlideImage    
+
+url = "https://brd.nci.nih.gov/brd/imagedownload/GTEX-O5YU-1426"
+slide = WholeSlideImage(url)
+slide.segment()
+slide.tile()
+feats, coords = slide.inference("resnet18")
+```
+
+### Full example
 
 This package is meant for both interactive use and for use in a pipeline at scale.
 By default actions do not return anything, but instead save the results to disk in files relative to the slide file.
@@ -33,8 +49,8 @@ All major functions have sensible defaults but allow for customization.
 Please check the docstring of each function for more information.
 
 ```python
-from wsi_core import WholeSlideImage
-from wsi_core.utils import Path
+from wsi import WholeSlideImage
+from wsi.utils import Path
 
 # Get example slide image
 slide_file = Path("GTEX-12ZZW-2726.svs")
@@ -48,7 +64,7 @@ if not slide_file.exists():
 # Instantiate slide object
 slide = WholeSlideImage(slide_file)
 
-# Instantiate slide object
+# Instantiation can be done with custom attributes
 slide = WholeSlideImage(slide_file, attributes=dict(donor="GTEX-12ZZW"))
 
 # Segment tissue (segmentation mask is stored as polygons in slide.contours_tissue)
@@ -75,15 +91,28 @@ for img in images:
 slide.save_tile_images(output_dir=slide_file.parent / (slide_file.stem + "_tiles"))
 
 # Use in a torch dataloader
-loader = slide.as_data_loader()
+loader = slide.as_data_loader(with_coords=True)
 
-# Extract features
+# Extract features "manually"
 import torch
 from tqdm import tqdm
-model = torch.hub.load("pytorch/vision", "resnet50", pretrained=True) 
-for count, (batch, coords) in tqdm(enumerate(loader), total=len(loader)):
+model = torch.hub.load("pytorch/vision", "resnet18", weights="DEFAULT")
+feats = list()
+coords = list()
+for count, (batch, yx) in tqdm(enumerate(loader), total=len(loader)):
     with torch.no_grad(): 
-        features = model(batch).numpy()
+        f = model(batch).numpy()
+    feats.append(f)
+    coords.append(yx)
+
+feats = np.concatenate(feats, axis=0)
+coords = np.concatenate(coords, axis=0)
+
+# Extract features "automatically"
+feats, coords = slide.inference('resnet18')
+
+# Additional parameters can also be specified
+feats, coords = slide.inference('resnet18', device='cuda', data_loader_kws=dict(batch_size=512))
 ```
 
 ## Reference

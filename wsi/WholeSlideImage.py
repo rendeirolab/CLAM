@@ -1,8 +1,6 @@
 import multiprocessing as mp
 import math
-import os
 import time
-from xml.dom import minidom
 import typing as tp
 from pathlib import Path as _Path
 
@@ -13,24 +11,16 @@ import openslide
 from PIL import Image
 import h5py
 
-from wsi_core.wsi_utils import (
-    savePatchIter_bag_hdf5,
-    initialize_hdf5_bag,
-    save_hdf5,
-    screen_coords,
-    isBlackPatch,
-    isWhitePatch,
-    to_percentiles,
-)
-from wsi_core.util_classes import (
+from .wsi_utils import save_hdf5, screen_coords, to_percentiles
+from .util_classes import (
     isInContourV1,
     isInContourV2,
     isInContourV3_Easy,
     isInContourV3_Hard,
-    Contour_Checking_fn,
+    ContourCheckingFn,
 )
-from wsi_core.file_utils import load_pkl, save_pkl
-from wsi_core.utils import Path, filter_kwargs_by_callable
+from .file_utils import load_pkl, save_pkl
+from .utils import Path, filter_kwargs_by_callable
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -50,27 +40,64 @@ class WholeSlideImage(object):
         Parameters
         ----------
         path: Path
-            Path to WSI file.
+            Path to WSI file or URL.
+            If URL is given, the file will be downloaded to a temporary directory in the filesystem.
         attributes: dict[str, tp.Any]
             Optional dictionary with attributes to store in the object.
         mask_file: Path
             Path to file used to save segmentation. Default is `path.with_suffix(".segmentation.pickle")`.
         hdf5_file: Path
             Path to file used to save tile coordinates (and images). Default is `path.with_suffix(".h5")`.
+
+        Attributes
+        ----------
+        path: Path
+            Path to WSI file.
+        attributes: dict[str, tp.Any]
+            Dictionary with attributes to store in the object.
+        name: str
+            Name of the WSI file.
+        wsi: openslide.OpenSlide
+            A handle to the low-level OpenSlide object.
+        hdf5_file: Path
+            Path to file used to save tile coordinates (and images).
+        level_downsamples: list[tuple[float, float]]
+            List of tuples with downsample factors for each level.
+        level_dim: list[tuple[int, int]]
+            List of tuples with dimensions for each level.
+        contours_tissue: list[np.ndarray]
+            List of tissue contours.
+        contours_tumor: list[np.ndarray]
+            List of tumor contours.
+        holes_tissue: list[np.ndarray]
+            List of holes in tissue contours.
+        mask_file: Path
+            Path to file used to save segmentation.
+        target: None
+            Placeholder for target (e.g. label) for the WSI.
+
+        Returns
+        -------
+        WholeSlideImage
+            WholeSlideImage object.
         """
+        from .utils import is_url, download_file
+
         if not isinstance(path, Path):
+            if is_url(path):
+                path = download_file(path)
             path = Path(path)
         self.path = path
         self.attributes = attributes
         self.name = path.stem
         self.wsi = openslide.open_slide(path)
-        self.level_downsamples = self._assertLevelDownsamples()
+        self.level_downsamples = self._assert_level_downsamples()
         self.level_dim = self.wsi.level_dimensions
 
         self.contours_tissue: list[np.ndarray] | None = None
         self.contours_tumor: list[np.ndarray] | None = None
         self.holes_tissue: list[np.ndarray] | None = None
-        self.holes_tumor: list[np.ndarray] | None = None
+        # UNUSED: self.holes_tumor: list[np.ndarray] | None = None
         self.mask_file: Path = (
             path.with_suffix(".segmentation.pickle") if mask_file is None else mask_file
         )
@@ -81,63 +108,7 @@ class WholeSlideImage(object):
     def __repr__(self):
         return f"WholeSlideImage('{self.path}')"
 
-    def getOpenSlide(self):
-        return self.wsi
-
-    def initXML(self, xml_path):
-        def _createContour(coord_list):
-            return np.array(
-                [
-                    [
-                        [
-                            int(float(coord.attributes["X"].value)),
-                            int(float(coord.attributes["Y"].value)),
-                        ]
-                    ]
-                    for coord in coord_list
-                ],
-                dtype="int32",
-            )
-
-        xmldoc = minidom.parse(xml_path)
-        annotations = [
-            anno.getElementsByTagName("Coordinate")
-            for anno in xmldoc.getElementsByTagName("Annotation")
-        ]
-        self.contours_tumor = [_createContour(coord_list) for coord_list in annotations]
-        self.contours_tumor = sorted(
-            self.contours_tumor, key=cv2.contourArea, reverse=True
-        )
-
-    def initTxt(self, annot_path):
-        def _create_contours_from_dict(annot):
-            all_cnts = []
-            for idx, annot_group in enumerate(annot):
-                contour_group = annot_group["coordinates"]
-                if annot_group["type"] == "Polygon":
-                    for idx, contour in enumerate(contour_group):
-                        contour = np.array(contour).astype(np.int32).reshape(-1, 1, 2)
-                        all_cnts.append(contour)
-
-                else:
-                    for idx, sgmt_group in enumerate(contour_group):
-                        contour = []
-                        for sgmt in sgmt_group:
-                            contour.extend(sgmt)
-                        contour = np.array(contour).astype(np.int32).reshape(-1, 1, 2)
-                        all_cnts.append(contour)
-
-            return all_cnts
-
-        with open(annot_path, "r") as f:
-            annot = f.read()
-            annot = eval(annot)
-        self.contours_tumor = _create_contours_from_dict(annot)
-        self.contours_tumor = sorted(
-            self.contours_tumor, key=cv2.contourArea, reverse=True
-        )
-
-    def initSegmentation(self, mask_file: Path | str | None = None):
+    def init_segmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
             mask_file = self.mask_file
         # load segmentation results from pickle file
@@ -146,16 +117,16 @@ class WholeSlideImage(object):
         self.contours_tissue = asset_dict["tissue"]
 
     def load_segmentation(self, mask_file: Path | str | None = None):
-        self.initSegmentation(mask_file)
+        self.init_segmentation(mask_file)
 
-    def saveSegmentation(self, mask_file: Path | str | None = None):
+    def save_segmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
             mask_file = self.mask_file
         # save segmentation results using pickle
         asset_dict = {"holes": self.holes_tissue, "tissue": self.contours_tissue}
         save_pkl(mask_file, asset_dict)
 
-    def segmentTissue(
+    def segment_tissue(
         self,
         seg_level=0,
         sthresh=20,
@@ -259,8 +230,8 @@ class WholeSlideImage(object):
                 contours, hierarchy, filter_params
             )  # Necessary for filtering out artifacts
 
-        self.contours_tissue = self.scaleContourDim(foreground_contours, scale)
-        self.holes_tissue = self.scaleHolesDim(hole_contours, scale)
+        self.contours_tissue = self.scale_contour_dim(foreground_contours, scale)
+        self.holes_tissue = self.scale_holes_dim(hole_contours, scale)
 
         # exclude_ids = [0,7,9]
         if len(keep_ids) > 0:
@@ -271,7 +242,7 @@ class WholeSlideImage(object):
         self.contours_tissue = [self.contours_tissue[i] for i in contour_ids]
         self.holes_tissue = [self.holes_tissue[i] for i in contour_ids]
 
-    def visWSI(
+    def vis_wsi(
         self,
         vis_level=0,
         color=(0, 255, 0),
@@ -313,7 +284,7 @@ class WholeSlideImage(object):
                 if not number_contours:
                     cv2.drawContours(
                         img,
-                        self.scaleContourDim(self.contours_tissue, scale),
+                        self.scale_contour_dim(self.contours_tissue, scale),
                         -1,
                         color,
                         line_thickness,
@@ -323,7 +294,7 @@ class WholeSlideImage(object):
 
                 else:  # add numbering to each contour
                     for idx, cont in enumerate(self.contours_tissue):
-                        contour = np.array(self.scaleContourDim(cont, scale))
+                        contour = np.array(self.scale_contour_dim(cont, scale))
                         M = cv2.moments(contour)
                         cX = int(M["m10"] / (M["m00"] + 1e-9))
                         cY = int(M["m01"] / (M["m00"] + 1e-9))
@@ -350,7 +321,7 @@ class WholeSlideImage(object):
                 for holes in self.holes_tissue:
                     cv2.drawContours(
                         img,
-                        self.scaleContourDim(holes, scale),
+                        self.scale_contour_dim(holes, scale),
                         -1,
                         hole_color,
                         line_thickness,
@@ -360,7 +331,7 @@ class WholeSlideImage(object):
             if self.contours_tumor is not None and annot_display:
                 cv2.drawContours(
                     img,
-                    self.scaleContourDim(self.contours_tumor, scale),
+                    self.scale_contour_dim(self.contours_tumor, scale),
                     -1,
                     annot_color,
                     line_thickness,
@@ -380,46 +351,9 @@ class WholeSlideImage(object):
 
         return img
 
-    def createPatches_bag_hdf5(
-        self,
-        save_path: Path | str | None = None,
-        patch_level=0,
-        patch_size=256,
-        step_size=256,
-        save_coord=True,
-        **kwargs,
-    ):
-        if save_path is None:
-            save_path = self.hdf5_file.parent
-        contours = self.contours_tissue
-        contour_holes = self.holes_tissue
-
-        print(f"Creating patches for: {self.name}")
-        elapsed = time.time()
-        for idx, cont in enumerate(contours):
-            patch_gen = self._getPatchGenerator(
-                cont, idx, patch_level, save_path, patch_size, step_size, **kwargs
-            )
-
-            if not self.hdf5_file.exists():
-                try:
-                    first_patch = next(patch_gen)
-
-                # empty contour, continue
-                except StopIteration:
-                    continue
-
-                file_path = initialize_hdf5_bag(first_patch, save_coord=save_coord)
-                self.hdf5_file = Path(file_path)
-
-            for patch in patch_gen:
-                savePatchIter_bag_hdf5(patch)
-
-        return self.hdf5_file
-
     def as_tile_bag(self):
-        # from wsi_core.dataset_h5 import Whole_Slide_Bag
-        from wsi_core.dataset_h5 import Whole_Slide_Bag_FP
+        # from wsi.dataset_h5 import Whole_Slide_Bag
+        from wsi.dataset_h5 import Whole_Slide_Bag_FP
 
         # dataset = Whole_Slide_Bag(self.hdf5_file, pretrained=True)
         dataset = Whole_Slide_Bag_FP(
@@ -429,7 +363,7 @@ class WholeSlideImage(object):
 
     def as_data_loader(self, batch_size: int = 32, with_coords: bool = False, **kwargs):
         from functools import partial
-        from wsi_core.utils import collate_features
+        from wsi.utils import collate_features
         from torch.utils.data import DataLoader
 
         collate = partial(collate_features, with_coords=with_coords)
@@ -444,7 +378,7 @@ class WholeSlideImage(object):
         self,
         model_name: str,
         model_repo: str = "pytorch/vision",
-        device: str = "cpu",
+        device: str | None = None,
         data_loader_kws: dict = {},
     ) -> tp.Tuple[np.ndarray, np.ndarray]:
         """
@@ -467,8 +401,11 @@ class WholeSlideImage(object):
         import torch
         from tqdm import tqdm
 
+        if device is None:
+            device = device or "cuda" if torch.cuda.is_available() else "cpu"
+
         data_loader = self.as_data_loader(**data_loader_kws, with_coords=True)
-        model = torch.hub.load(model_repo, model_name, pretrained=True).to(device)
+        model = torch.hub.load(model_repo, model_name, weights="DEFAULT").to(device)
         model.eval()
         coords = list()
         feats = list()
@@ -478,128 +415,8 @@ class WholeSlideImage(object):
                 coords.append(coord)
         return np.concatenate(feats, axis=0), np.concatenate(coords, axis=0)
 
-    def _getPatchGenerator(
-        self,
-        cont,
-        cont_idx,
-        patch_level,
-        save_path,
-        patch_size=256,
-        step_size=256,
-        custom_downsample=1,
-        white_black=True,
-        white_thresh=15,
-        black_thresh=50,
-        contour_fn="four_pt",
-        use_padding=True,
-    ):
-        start_x, start_y, w, h = (
-            cv2.boundingRect(cont)
-            if cont is not None
-            else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
-        )
-        # print("Bounding Box:", start_x, start_y, w, h)
-        # print("Contour Area:", cv2.contourArea(cont))
-
-        if custom_downsample > 1:
-            assert custom_downsample == 2
-            target_patch_size = patch_size
-            patch_size = target_patch_size * 2
-            step_size = step_size * 2
-            print(
-                "Custom Downsample: {}, Patching at {} x {}, But Final Patch Size is {} x {}".format(
-                    custom_downsample,
-                    patch_size,
-                    patch_size,
-                    target_patch_size,
-                    target_patch_size,
-                )
-            )
-
-        patch_downsample = (
-            int(self.level_downsamples[patch_level][0]),
-            int(self.level_downsamples[patch_level][1]),
-        )
-        ref_patch_size = (
-            patch_size * patch_downsample[0],
-            patch_size * patch_downsample[1],
-        )
-
-        step_size_x = step_size * patch_downsample[0]
-        step_size_y = step_size * patch_downsample[1]
-
-        if isinstance(contour_fn, str):
-            if contour_fn == "four_pt":
-                cont_check_fn = isInContourV3_Easy(
-                    contour=cont, patch_size=ref_patch_size[0], center_shift=0.5
-                )
-            elif contour_fn == "four_pt_hard":
-                cont_check_fn = isInContourV3_Hard(
-                    contour=cont, patch_size=ref_patch_size[0], center_shift=0.5
-                )
-            elif contour_fn == "center":
-                cont_check_fn = isInContourV2(contour=cont, patch_size=ref_patch_size[0])
-            elif contour_fn == "basic":
-                cont_check_fn = isInContourV1(contour=cont)
-            else:
-                raise NotImplementedError
-        else:
-            assert isinstance(contour_fn, Contour_Checking_fn)
-            cont_check_fn = contour_fn
-
-        img_w, img_h = self.level_dim[0]
-        if use_padding:
-            stop_y = start_y + h
-            stop_x = start_x + w
-        else:
-            stop_y = min(start_y + h, img_h - ref_patch_size[1])
-            stop_x = min(start_x + w, img_w - ref_patch_size[0])
-
-        count = 0
-        for y in range(start_y, stop_y, step_size_y):
-            for x in range(start_x, stop_x, step_size_x):
-                if not self.isInContours(
-                    cont_check_fn,
-                    (x, y),
-                    self.holes_tissue[cont_idx],
-                    ref_patch_size[0],
-                ):  # point not inside contour and its associated holes
-                    continue
-
-                count += 1
-                patch_PIL = self.wsi.read_region(
-                    (x, y), patch_level, (patch_size, patch_size)
-                ).convert("RGB")
-                if custom_downsample > 1:
-                    patch_PIL = patch_PIL.resize((target_patch_size, target_patch_size))
-
-                if white_black:
-                    if isBlackPatch(
-                        np.array(patch_PIL), rgbThresh=black_thresh
-                    ) or isWhitePatch(np.array(patch_PIL), satThresh=white_thresh):
-                        continue
-
-                patch_info = {
-                    "x": x // (patch_downsample[0] * custom_downsample),
-                    "y": y // (patch_downsample[1] * custom_downsample),
-                    "cont_idx": cont_idx,
-                    "patch_level": patch_level,
-                    "downsample": self.level_downsamples[patch_level],
-                    "downsampled_level_dim": tuple(
-                        np.array(self.level_dim[patch_level]) // custom_downsample
-                    ),
-                    "level_dim": self.level_dim[patch_level],
-                    "patch_PIL": patch_PIL,
-                    "name": self.name,
-                    "save_path": save_path,
-                }
-
-                yield patch_info
-
-        print("patches extracted: {}".format(count))
-
     @staticmethod
-    def isInHoles(holes, pt, patch_size):
+    def is_in_holes(holes, pt, patch_size):
         for hole in holes:
             if (
                 cv2.pointPolygonTest(
@@ -612,35 +429,40 @@ class WholeSlideImage(object):
         return 0
 
     @staticmethod
-    def isInContours(cont_check_fn, pt, holes=None, patch_size=256):
+    def is_in_contours(cont_check_fn, pt, holes=None, patch_size=256):
         if cont_check_fn(pt):
             if holes is not None:
-                return not WholeSlideImage.isInHoles(holes, pt, patch_size)
+                return not WholeSlideImage.is_in_holes(holes, pt, patch_size)
             else:
                 return 1
         return 0
 
     @staticmethod
-    def scaleContourDim(contours, scale):
+    def scale_contour_dim(contours, scale):
         return [np.array(cont * scale, dtype="int32") for cont in contours]
 
     @staticmethod
-    def scaleHolesDim(contours, scale):
+    def scale_holes_dim(contours, scale):
         return [
             [np.array(hole * scale, dtype="int32") for hole in holes]
             for holes in contours
         ]
 
-    def _assertLevelDownsamples(self):
+    def _assert_level_downsamples(self):
         level_downsamples = []
         dim_0 = self.wsi.level_dimensions[0]
 
         for downsample, dim in zip(self.wsi.level_downsamples, self.wsi.level_dimensions):
             estimated_downsample = (dim_0[0] / float(dim[0]), dim_0[1] / float(dim[1]))
-            level_downsamples.append(estimated_downsample) if estimated_downsample != (
-                downsample,
-                downsample,
-            ) else level_downsamples.append((downsample, downsample))
+            (
+                level_downsamples.append(estimated_downsample)
+                if estimated_downsample
+                != (
+                    downsample,
+                    downsample,
+                )
+                else level_downsamples.append((downsample, downsample))
+            )
 
         return level_downsamples
 
@@ -803,7 +625,7 @@ class WholeSlideImage(object):
         self.holes_tissue = [x[:, np.newaxis, :] for x in holes_tissue]
 
         assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
-        self.saveSegmentation()
+        self.save_segmentation()
 
     def segment(
         self,
@@ -869,11 +691,11 @@ class WholeSlideImage(object):
                 ).sum(1)
                 params["seg_level"] = np.argmin(g)
 
-            kwargs = filter_kwargs_by_callable(params, self.segmentTissue)
+            kwargs = filter_kwargs_by_callable(params, self.segment_tissue)
             fkwargs = {k: v for k, v in params.items() if k not in kwargs}
-            self.segmentTissue(**kwargs, filter_params=fkwargs)
+            self.segment_tissue(**kwargs, filter_params=fkwargs)
             assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
-            self.saveSegmentation()
+            self.save_segmentation()
         self.plot_segmentation()
 
     # def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
@@ -932,7 +754,7 @@ class WholeSlideImage(object):
             `self.path.with_suffix(".segmentation.png")`.
 
         kwargs: dict
-            Additional keyword arguments to pass to `visWSI`.
+            Additional keyword arguments to pass to `vis_wsi`.
 
         Returns
         -------
@@ -942,7 +764,7 @@ class WholeSlideImage(object):
             output_file = self.path.with_suffix(".segmentation.png")
 
         level = self.wsi.level_count - 1
-        self.visWSI(vis_level=level, **kwargs).save(output_file)
+        self.vis_wsi(vis_level=level, **kwargs).save(output_file)
 
     def tile(
         self,
@@ -1210,7 +1032,7 @@ class WholeSlideImage(object):
             else:
                 raise NotImplementedError
         else:
-            assert isinstance(contour_fn, Contour_Checking_fn)
+            assert isinstance(contour_fn, ContourCheckingFn)
             cont_check_fn = contour_fn
 
         step_size_x = step_size * patch_downsample[0]
@@ -1257,13 +1079,14 @@ class WholeSlideImage(object):
 
     @staticmethod
     def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
-        if WholeSlideImage.isInContours(
+        if WholeSlideImage.is_in_contours(
             cont_check_fn, coord, contour_holes, ref_patch_size
         ):
             return coord
         else:
             return None
 
+    # TODO: adapt and illustrate usage
     def visHeatmap(
         self,
         scores,
@@ -1273,7 +1096,7 @@ class WholeSlideImage(object):
         bot_right=None,
         patch_size=(256, 256),
         blank_canvas=False,
-        canvas_color=(220, 20, 50),
+        # UNUSED: canvas_color=(220, 20, 50),
         alpha=0.4,
         blur=False,
         overlap=0.0,
@@ -1297,7 +1120,7 @@ class WholeSlideImage(object):
             alpha (float [0, 1]): blending coefficient for overlaying heatmap onto original slide
             blur (bool): apply gaussian blurring
             overlap (float [0 1]): percentage of overlap between neighboring patches (only affect radius of blurring)
-            segment (bool): whether to use tissue segmentation contour (must have already called self.segmentTissue such that
+            segment (bool): whether to use tissue segmentation contour (must have already called self.segment_tissue such that
                             self.contours_tissue and self.holes_tissue are not None
             use_holes (bool): whether to also clip out detected tissue cavities (only in effect when segment == True)
             convert_to_percentiles (bool): whether to convert attention scores to percentiles
@@ -1569,10 +1392,10 @@ class WholeSlideImage(object):
     def get_seg_mask(self, region_size, scale, use_holes=False, offset=(0, 0)):
         print("\ncomputing foreground tissue mask")
         tissue_mask = np.full(np.flip(region_size), 0).astype(np.uint8)
-        contours_tissue = self.scaleContourDim(self.contours_tissue, scale)
+        contours_tissue = self.scale_contour_dim(self.contours_tissue, scale)
         offset = tuple((np.array(offset) * np.array(scale) * -1).astype(np.int32))
 
-        contours_holes = self.scaleHolesDim(self.holes_tissue, scale)
+        contours_holes = self.scale_holes_dim(self.holes_tissue, scale)
         contours_tissue, contours_holes = zip(
             *sorted(
                 zip(contours_tissue, contours_holes),
@@ -1599,7 +1422,7 @@ class WholeSlideImage(object):
                     offset=offset,
                     thickness=-1,
                 )
-            # contours_holes = self._scaleContourDim(self.holes_tissue, scale, holes=True, area_thresh=area_thresh)
+            # contours_holes = self._scale_contour_dim(self.holes_tissue, scale, holes=True, area_thresh=area_thresh)
 
         tissue_mask = tissue_mask.astype(bool)
         print(

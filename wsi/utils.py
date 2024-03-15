@@ -8,14 +8,12 @@ import pathlib
 
 import torch
 import numpy as np
-import torch.nn as nn
 from torch.utils.data import (
     DataLoader,
     Sampler,
     WeightedRandomSampler,
     RandomSampler,
     SequentialSampler,
-    sampler,
 )
 import torch.optim as optim
 
@@ -54,9 +52,6 @@ class Path(pathlib.Path):
 
     def endswith(self, string: str) -> bool:
         return str(self).endswith(string)
-
-    def replace_(self, patt: str, repl: str) -> Path:
-        return Path(str(self).replace(patt, repl))
 
     def iterdir(self) -> tp.Generator:
         if self.exists():
@@ -124,22 +119,6 @@ def collate_features(batch, with_coords: bool = False):
         return img
     coords = np.vstack([item[1] for item in batch])
     return [img, coords]
-
-
-def get_simple_loader(dataset, batch_size=1, num_workers=1):
-    kwargs = (
-        {"num_workers": 4, "pin_memory": False, "num_workers": num_workers}
-        if device.type == "cuda"
-        else {}
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=sampler.SequentialSampler(dataset),
-        collate_fn=collate_MIL,
-        **kwargs,
-    )
-    return loader
 
 
 def get_split_loader(split_dataset, training=False, testing=False, weighted=False):
@@ -303,12 +282,26 @@ def make_weights_for_balanced_classes_split(dataset):
     return torch.DoubleTensor(weight)
 
 
-def initialize_weights(module):
-    for m in module.modules():
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_normal_(m.weight)
-            m.bias.data.zero_()
+def is_url(url: str) -> bool:
+    return url.startswith("http")
 
-        elif isinstance(m, nn.BatchNorm1d):
-            nn.init.constant_(m.weight, 1)
-            nn.init.constant_(m.bias, 0)
+
+def download_file(
+    url: str, dest: Path | str | None = None, overwrite: bool = False
+) -> Path:
+    import tempfile
+    import requests
+
+    if dest is None:
+        dest = Path(tempfile.NamedTemporaryFile().name)
+
+    if Path(dest).exists() and not overwrite:
+        return Path(dest)
+
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+
+    with open(dest, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    return Path(dest)
