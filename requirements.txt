@@ -1,4 +1,5 @@
 requests
+tqdm
 opencv-python
 scikit-image
 h5py
