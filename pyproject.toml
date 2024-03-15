@@ -21,17 +21,20 @@ classifiers = [
 #license = "gpt3"
 requires-python = ">=3.10"
 dependencies = [
-    "requests",
-    "tqdm",
-    "opencv-python",
-    "scikit-image",
     "h5py",
     "matplotlib",
     "numpy",
+    "opencv-python",
     "openslide-python",
+    "pandas",
     "Pillow",
+    "requests",
+    "scikit-image",
+    "scikit-learn",
+    "scipy",
     "torch",
     "torchvision",
+    "tqdm",
 ]
 dynamic = ['version']
 
