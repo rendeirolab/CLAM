@@ -5,22 +5,25 @@ import typing as tp
 from pathlib import Path as _Path
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import openslide
 from PIL import Image
 import h5py
 
-from .wsi_utils import save_hdf5, screen_coords, to_percentiles
-from .util_classes import (
+from .utils import (
+    Path,
     isInContourV1,
     isInContourV2,
     isInContourV3_Easy,
     isInContourV3_Hard,
     ContourCheckingFn,
+    save_hdf5,
+    load_pkl,
+    save_pkl,
+    screen_coords,
+    to_percentiles,
+    filter_kwargs_by_callable,
 )
-from .file_utils import load_pkl, save_pkl
-from .utils import Path, filter_kwargs_by_callable
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -108,7 +111,7 @@ class WholeSlideImage(object):
     def __repr__(self):
         return f"WholeSlideImage('{self.path}')"
 
-    def init_segmentation(self, mask_file: Path | str | None = None):
+    def _init_segmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
             mask_file = self.mask_file
         # load segmentation results from pickle file
@@ -117,7 +120,7 @@ class WholeSlideImage(object):
         self.contours_tissue = asset_dict["tissue"]
 
     def load_segmentation(self, mask_file: Path | str | None = None):
-        self.init_segmentation(mask_file)
+        self._init_segmentation(mask_file)
 
     def save_segmentation(self, mask_file: Path | str | None = None):
         if mask_file is None:
@@ -126,7 +129,7 @@ class WholeSlideImage(object):
         asset_dict = {"holes": self.holes_tissue, "tissue": self.contours_tissue}
         save_pkl(mask_file, asset_dict)
 
-    def segment_tissue(
+    def _segment_tissue(
         self,
         seg_level=0,
         sthresh=20,
@@ -230,8 +233,8 @@ class WholeSlideImage(object):
                 contours, hierarchy, filter_params
             )  # Necessary for filtering out artifacts
 
-        self.contours_tissue = self.scale_contour_dim(foreground_contours, scale)
-        self.holes_tissue = self.scale_holes_dim(hole_contours, scale)
+        self.contours_tissue = self._scale_contour_dim(foreground_contours, scale)
+        self.holes_tissue = self._scale_holes_dim(hole_contours, scale)
 
         # exclude_ids = [0,7,9]
         if len(keep_ids) > 0:
@@ -284,7 +287,7 @@ class WholeSlideImage(object):
                 if not number_contours:
                     cv2.drawContours(
                         img,
-                        self.scale_contour_dim(self.contours_tissue, scale),
+                        self._scale_contour_dim(self.contours_tissue, scale),
                         -1,
                         color,
                         line_thickness,
@@ -294,7 +297,7 @@ class WholeSlideImage(object):
 
                 else:  # add numbering to each contour
                     for idx, cont in enumerate(self.contours_tissue):
-                        contour = np.array(self.scale_contour_dim(cont, scale))
+                        contour = np.array(self._scale_contour_dim(cont, scale))
                         M = cv2.moments(contour)
                         cX = int(M["m10"] / (M["m00"] + 1e-9))
                         cY = int(M["m01"] / (M["m00"] + 1e-9))
@@ -321,7 +324,7 @@ class WholeSlideImage(object):
                 for holes in self.holes_tissue:
                     cv2.drawContours(
                         img,
-                        self.scale_contour_dim(holes, scale),
+                        self._scale_contour_dim(holes, scale),
                         -1,
                         hole_color,
                         line_thickness,
@@ -331,7 +334,7 @@ class WholeSlideImage(object):
             if self.contours_tumor is not None and annot_display:
                 cv2.drawContours(
                     img,
-                    self.scale_contour_dim(self.contours_tumor, scale),
+                    self._scale_contour_dim(self.contours_tumor, scale),
                     -1,
                     annot_color,
                     line_thickness,
@@ -351,72 +354,8 @@ class WholeSlideImage(object):
 
         return img
 
-    def as_tile_bag(self):
-        # from wsi.dataset_h5 import Whole_Slide_Bag
-        from wsi.dataset_h5 import Whole_Slide_Bag_FP
-
-        # dataset = Whole_Slide_Bag(self.hdf5_file, pretrained=True)
-        dataset = Whole_Slide_Bag_FP(
-            self.hdf5_file, self.wsi, pretrained=True, target=self.target
-        )
-        return dataset
-
-    def as_data_loader(self, batch_size: int = 32, with_coords: bool = False, **kwargs):
-        from functools import partial
-        from wsi.utils import collate_features
-        from torch.utils.data import DataLoader
-
-        collate = partial(collate_features, with_coords=with_coords)
-
-        dataset = self.as_tile_bag()
-        loader = DataLoader(
-            dataset=dataset, batch_size=batch_size, collate_fn=collate, **kwargs
-        )
-        return loader
-
-    def inference(
-        self,
-        model_name: str,
-        model_repo: str = "pytorch/vision",
-        device: str | None = None,
-        data_loader_kws: dict = {},
-    ) -> tp.Tuple[np.ndarray, np.ndarray]:
-        """
-        Inference on the WSI using a pretrained model.
-
-        Parameters
-        ----------
-        model_name: str
-            Name of the model to use for inference.
-        model_repo: str
-            Repository to load the model from. Default is "torch/vision".
-        data_loader_kws: dict
-            Keyword arguments to pass to the data loader.
-
-        Returns
-        -------
-        Tuple[np.ndarray, np.ndarray]
-            Tuple of (features, coordinates).
-        """
-        import torch
-        from tqdm import tqdm
-
-        if device is None:
-            device = device or "cuda" if torch.cuda.is_available() else "cpu"
-
-        data_loader = self.as_data_loader(**data_loader_kws, with_coords=True)
-        model = torch.hub.load(model_repo, model_name, weights="DEFAULT").to(device)
-        model.eval()
-        coords = list()
-        feats = list()
-        for batch, coord in tqdm(data_loader):
-            with torch.no_grad():
-                feats.append(model(batch.to(device)).cpu().numpy())
-                coords.append(coord)
-        return np.concatenate(feats, axis=0), np.concatenate(coords, axis=0)
-
     @staticmethod
-    def is_in_holes(holes, pt, patch_size):
+    def _is_in_holes(holes, pt, patch_size):
         for hole in holes:
             if (
                 cv2.pointPolygonTest(
@@ -429,20 +368,20 @@ class WholeSlideImage(object):
         return 0
 
     @staticmethod
-    def is_in_contours(cont_check_fn, pt, holes=None, patch_size=256):
+    def _is_in_contours(cont_check_fn, pt, holes=None, patch_size=256):
         if cont_check_fn(pt):
             if holes is not None:
-                return not WholeSlideImage.is_in_holes(holes, pt, patch_size)
+                return not WholeSlideImage._is_in_holes(holes, pt, patch_size)
             else:
                 return 1
         return 0
 
     @staticmethod
-    def scale_contour_dim(contours, scale):
+    def _scale_contour_dim(contours, scale):
         return [np.array(cont * scale, dtype="int32") for cont in contours]
 
     @staticmethod
-    def scale_holes_dim(contours, scale):
+    def _scale_holes_dim(contours, scale):
         return [
             [np.array(hole * scale, dtype="int32") for hole in holes]
             for holes in contours
@@ -466,14 +405,14 @@ class WholeSlideImage(object):
 
         return level_downsamples
 
-    def process_contours(
+    def _process_contours(
         self,
         save_path: tp.Optional[Path] = None,
         patch_level=0,
         patch_size=256,
         step_size=256,
         **kwargs,
-    ):
+    ) -> Path:
         if save_path is None:
             save_path = self.hdf5_file
         # print("Creating patches for: ", self.name, "...")
@@ -486,7 +425,7 @@ class WholeSlideImage(object):
             if (idx + 1) % fp_chunk_size == fp_chunk_size:
                 print("Processing contour {}/{}".format(idx, n_contours))
 
-            asset_dict, attr_dict = self.process_contour(
+            asset_dict, attr_dict = self._process_contour(
                 cont,
                 self.holes_tissue[idx],
                 patch_level,
@@ -512,11 +451,12 @@ class WholeSlideImage(object):
 
         return self.hdf5_file
 
-    def decompose_color(self, output_file: Path | None = None):
+    def _decompose_color(self, output_file: Path | None = None) -> None:
         from skimage.color import rgb2hsv, hsv2rgb, rgb_from_hed
         from sklearn.decomposition import PCA  # , FastICA
+        import matplotlib.pyplot as plt
 
-        def minmax_scale(x):
+        def _minmax_scale(x):
             return (x - np.min(x)) / (np.max(x) - np.min(x))
 
         if output_file is None:
@@ -548,13 +488,30 @@ class WholeSlideImage(object):
         axes[0].set(title=f"PC {sel}, argmax: {sel.argmax()}, sign: {sign}")
         axes[0].imshow(thumbnail)
         for i in range(3):
-            axes[i + 1].imshow(minmax_scale(thumbnail_pca[..., i]))
+            axes[i + 1].imshow(_minmax_scale(thumbnail_pca[..., i]))
         for ax in axes:
             ax.axis("off")
         fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
         plt.close(fig)
 
-    def segment_tissue_manual(self, level: int | None = None, color_space: str = "RGB"):
+    def _segment_tissue_manual(
+        self, level: int | None = None, color_space: str = "RGB"
+    ) -> None:
+        """
+        Segment the tissue using manually optimized parameters.
+
+        Parameters
+        ----------
+        level: int
+            WSI level to segment tissue from.
+            Default is None, which will find the level closest to a thumbnail with 2000x2000 pixels.
+        color_space: str
+            Color space to work in. Either "RGB" or "HED".
+
+        Returns
+        -------
+        None
+        """
         import skimage
         import scipy.ndimage as ndi
 
@@ -661,7 +618,7 @@ class WholeSlideImage(object):
         """
         assert method in ["manual", "CLAM"], f"Unknown segmentation method: {method}"
         if method == "manual":
-            self.segment_tissue_manual(**(params or {}))
+            self._segment_tissue_manual(**(params or {}))
         else:
             # import pandas as pd
             if params is None:
@@ -691,54 +648,12 @@ class WholeSlideImage(object):
                 ).sum(1)
                 params["seg_level"] = np.argmin(g)
 
-            kwargs = filter_kwargs_by_callable(params, self.segment_tissue)
+            kwargs = filter_kwargs_by_callable(params, self._segment_tissue)
             fkwargs = {k: v for k, v in params.items() if k not in kwargs}
-            self.segment_tissue(**kwargs, filter_params=fkwargs)
+            self._segment_tissue(**kwargs, filter_params=fkwargs)
             assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
             self.save_segmentation()
         self.plot_segmentation()
-
-    # def plot_segmentation(self, output_file: tp.Optional[Path] = None) -> None:
-    #     from shapely.geometry import Polygon
-
-    #     if output_file is None:
-    #         output_file = self.mask_file.with_suffix(".png")
-
-    #     level = self.wsi.level_count - 1
-    #     thumbnail = np.array(
-    #         self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
-    #     )
-
-    #     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-    #     ax.imshow(thumbnail)
-    #     tissue: np.ndarray
-    #     hole: np.ndarray
-    #     for i, tissue in enumerate(self.contours_tissue or [], 1):
-    #         # resize to thumbnail size
-    #         tissue = np.array(
-    #             tissue.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
-    #         )
-    #         poly = Polygon(tissue)
-    #         ax.plot(*tissue.T)
-    #         ax.text(
-    #             *poly.centroid.coords[0],
-    #             str(i),
-    #             color="black",
-    #             ha="center",
-    #             va="center",
-    #             fontsize=10,
-    #         )
-    #     for i, hole in enumerate(self.holes_tissue or [], 1):
-    #         # resize to thumbnail size
-    #         hole = np.array(
-    #             hole.squeeze() / self.wsi.level_downsamples[level], dtype="int32"
-    #         )
-    #         poly = Polygon(hole)
-    #         ax.plot(*hole.T, color="black", linestyle="-", linewidth=0.2)
-    #     ax.axis("off")
-    #     fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
-    #     plt.close(fig)
-    #     return fig
 
     def plot_segmentation(self, output_file: tp.Optional[Path] = None, **kwargs) -> None:
         """
@@ -798,20 +713,36 @@ class WholeSlideImage(object):
             original_contours = copy(self.contours_tissue)
             self.contours_tissue = [self.contours_tissue[i - 1] for i in contour_subset]
 
-        self.process_contours(
+        self._process_contours(
             patch_level=patch_level, patch_size=patch_size, step_size=step_size
         )
 
         if contour_subset is not None:
             self.contours_tissue = original_contours
 
-    def has_tile_coords(self):
+    def has_tile_coords(self) -> bool:
+        """
+        Check if the WSI has tile coordinates saved in its HDF5 file.
+
+        Returns
+        -------
+        bool
+            True if it exists
+        """
         if not self.hdf5_file.exists():
             return False
         with h5py.File(self.hdf5_file, "r") as h5:
             return "coords" in h5
 
-    def has_tile_images(self):
+    def has_tile_images(self) -> bool:
+        """
+        Check if the WSI has tile images in its HDF5 file.
+
+        Returns
+        -------
+        bool
+            True if it exists
+        """
         if not self.hdf5_file.exists():
             return False
         with h5py.File(self.hdf5_file, "r") as h5:
@@ -841,6 +772,21 @@ class WholeSlideImage(object):
     def get_tile_coordinate_level_size(
         self, hdf5_file: Path | None = None
     ) -> tuple[int, int]:
+        """
+        Retrieve level and size of tiles from HDF5 file.
+
+        By default uses the `self.hdf5_file` attribute, but can be overridden.
+
+        Parameters
+        ----------
+        hdf5_file: Path
+            Path to HDF5 file containing tile coordinates.
+
+        Returns
+        -------
+        tuple[int, int]
+            Level and size of tiles.
+        """
         if hdf5_file is None:
             hdf5_file = self.hdf5_file  # or self.tile_h5
         with h5py.File(hdf5_file, "r") as h5:
@@ -960,7 +906,7 @@ class WholeSlideImage(object):
             img = self.wsi.read_region(coord, level=level, size=(size, size))
             img.convert("RGB").save(fp)
 
-    def process_contour(
+    def _process_contour(
         self,
         cont,
         contour_holes,
@@ -1050,7 +996,7 @@ class WholeSlideImage(object):
             (coord, contour_holes, ref_patch_size[0], cont_check_fn)
             for coord in coord_candidates
         ]
-        results = pool.starmap(WholeSlideImage.process_coord_candidate, iterable)
+        results = pool.starmap(WholeSlideImage._process_coord_candidate, iterable)
         pool.close()
         results = np.array([result for result in results if result is not None])
 
@@ -1076,8 +1022,8 @@ class WholeSlideImage(object):
             return {}, {}
 
     @staticmethod
-    def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
-        if WholeSlideImage.is_in_contours(
+    def _process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
+        if WholeSlideImage._is_in_contours(
             cont_check_fn, coord, contour_holes, ref_patch_size
         ):
             return coord
@@ -1118,7 +1064,7 @@ class WholeSlideImage(object):
             alpha (float [0, 1]): blending coefficient for overlaying heatmap onto original slide
             blur (bool): apply gaussian blurring
             overlap (float [0 1]): percentage of overlap between neighboring patches (only affect radius of blurring)
-            segment (bool): whether to use tissue segmentation contour (must have already called self.segment_tissue such that
+            segment (bool): whether to use tissue segmentation contour (must have already called self._segment_tissue such that
                             self.contours_tissue and self.holes_tissue are not None
             use_holes (bool): whether to also clip out detected tissue cavities (only in effect when segment == True)
             convert_to_percentiles (bool): whether to convert attention scores to percentiles
@@ -1128,6 +1074,7 @@ class WholeSlideImage(object):
             custom_downsample (int): additionally downscale the heatmap by specified factor
             cmap (str): name of matplotlib colormap to use
         """
+        import matplotlib.pyplot as plt
 
         if vis_level < 0:
             vis_level = self.wsi.get_best_level_for_downsample(32)
@@ -1227,7 +1174,7 @@ class WholeSlideImage(object):
             )
 
         if segment:
-            tissue_mask = self.get_seg_mask(
+            tissue_mask = self._get_seg_mask(
                 region_size, scale, use_holes=use_holes, offset=tuple(top_left)
             )
             # return Image.fromarray(tissue_mask) # tissue mask
@@ -1300,7 +1247,7 @@ class WholeSlideImage(object):
             )
 
         if alpha < 1.0:
-            img = self.block_blending(
+            img = self._block_blending(
                 img,
                 vis_level,
                 top_left,
@@ -1322,7 +1269,7 @@ class WholeSlideImage(object):
 
         return img
 
-    def block_blending(
+    def _block_blending(
         self,
         img,
         vis_level,
@@ -1387,13 +1334,13 @@ class WholeSlideImage(object):
                 )
         return img
 
-    def get_seg_mask(self, region_size, scale, use_holes=False, offset=(0, 0)):
+    def _get_seg_mask(self, region_size, scale, use_holes=False, offset=(0, 0)):
         print("\ncomputing foreground tissue mask")
         tissue_mask = np.full(np.flip(region_size), 0).astype(np.uint8)
-        contours_tissue = self.scale_contour_dim(self.contours_tissue, scale)
+        contours_tissue = self._scale_contour_dim(self.contours_tissue, scale)
         offset = tuple((np.array(offset) * np.array(scale) * -1).astype(np.int32))
 
-        contours_holes = self.scale_holes_dim(self.holes_tissue, scale)
+        contours_holes = self._scale_holes_dim(self.holes_tissue, scale)
         contours_tissue, contours_holes = zip(
             *sorted(
                 zip(contours_tissue, contours_holes),
@@ -1420,7 +1367,7 @@ class WholeSlideImage(object):
                     offset=offset,
                     thickness=-1,
                 )
-            # contours_holes = self._scale_contour_dim(self.holes_tissue, scale, holes=True, area_thresh=area_thresh)
+            # contours_holes = self.__scale_contour_dim(self.holes_tissue, scale, holes=True, area_thresh=area_thresh)
 
         tissue_mask = tissue_mask.astype(bool)
         print(
@@ -1429,3 +1376,67 @@ class WholeSlideImage(object):
             )
         )
         return tissue_mask
+
+    def as_tile_bag(self):
+        # from .utils import Whole_Slide_Bag
+        from .utils import Whole_Slide_Bag_FP
+
+        # dataset = Whole_Slide_Bag(self.hdf5_file, pretrained=True)
+        dataset = Whole_Slide_Bag_FP(
+            self.hdf5_file, self.wsi, pretrained=True, target=self.target
+        )
+        return dataset
+
+    def as_data_loader(self, batch_size: int = 32, with_coords: bool = False, **kwargs):
+        from functools import partial
+        from .utils import collate_features
+        from torch.utils.data import DataLoader
+
+        collate = partial(collate_features, with_coords=with_coords)
+
+        dataset = self.as_tile_bag()
+        loader = DataLoader(
+            dataset=dataset, batch_size=batch_size, collate_fn=collate, **kwargs
+        )
+        return loader
+
+    def inference(
+        self,
+        model_name: str,
+        model_repo: str = "pytorch/vision",
+        device: str | None = None,
+        data_loader_kws: dict = {},
+    ) -> tp.Tuple[np.ndarray, np.ndarray]:
+        """
+        Inference on the WSI using a pretrained model.
+
+        Parameters
+        ----------
+        model_name: str
+            Name of the model to use for inference.
+        model_repo: str
+            Repository to load the model from. Default is "torch/vision".
+        data_loader_kws: dict
+            Keyword arguments to pass to the data loader.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Tuple of (features, coordinates).
+        """
+        import torch
+        from tqdm import tqdm
+
+        if device is None:
+            device = device or "cuda" if torch.cuda.is_available() else "cpu"
+
+        data_loader = self.as_data_loader(**data_loader_kws, with_coords=True)
+        model = torch.hub.load(model_repo, model_name, weights="DEFAULT").to(device)
+        model.eval()
+        coords = list()
+        feats = list()
+        for batch, coord in tqdm(data_loader):
+            with torch.no_grad():
+                feats.append(model(batch.to(device)).cpu().numpy())
+                coords.append(coord)
+        return np.concatenate(feats, axis=0), np.concatenate(coords, axis=0)

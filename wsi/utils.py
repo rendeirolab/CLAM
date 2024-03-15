@@ -1,23 +1,17 @@
 from __future__ import annotations
 import os
 import typing as tp
-import math
-from itertools import islice
-import collections
 import pathlib
+import tempfile
+import pickle
 
-import torch
+import requests
+import h5py
 import numpy as np
-from torch.utils.data import (
-    DataLoader,
-    Sampler,
-    WeightedRandomSampler,
-    RandomSampler,
-    SequentialSampler,
-)
-import torch.optim as optim
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import cv2
+import torch
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 
 class Path(pathlib.Path):
@@ -80,25 +74,178 @@ class Path(pathlib.Path):
             yield from super().glob(pattern)
 
 
-class SubsetSequentialSampler(Sampler):
-    """Samples elements sequentially from a given list of indices, without replacement.
+class Whole_Slide_Bag_FP(Dataset):
+    def __init__(
+        self,
+        file_path,
+        wsi,
+        pretrained=False,
+        custom_transforms=None,
+        custom_downsample=1,
+        target_patch_size=-1,
+        target=None,
+    ):
+        """
+        Args:
+            file_path (string): Path to the .h5 file containing patched data.
+            pretrained (bool): Use ImageNet transforms
+            custom_transforms (callable, optional): Optional transform to be applied on a sample
+            custom_downsample (int): Custom defined downscale factor (overruled by target_patch_size)
+            target_patch_size (int): Custom defined image size before embedding
+        """
+        self.target = target
 
-    Arguments:
-            indices (sequence): a sequence of indices
-    """
+        self.pretrained = pretrained
+        self.wsi = wsi
+        if not custom_transforms:
+            self.roi_transforms = default_transforms(pretrained=pretrained)
+        else:
+            self.roi_transforms = custom_transforms
 
-    def __init__(self, indices):
-        self.indices = indices
+        self.file_path = file_path
 
-    def __iter__(self):
-        return iter(self.indices)
+        with h5py.File(self.file_path, "r") as f:
+            dset = f["coords"]
+            self.patch_level = f["coords"].attrs["patch_level"]
+            self.patch_size = f["coords"].attrs["patch_size"]
+            self.length = len(dset)
+            if target_patch_size > 0:
+                self.target_patch_size = (target_patch_size,) * 2
+            elif custom_downsample > 1:
+                self.target_patch_size = (self.patch_size // custom_downsample,) * 2
+            else:
+                self.target_patch_size = None
+        # self.summary()
 
     def __len__(self):
-        return len(self.indices)
+        return self.length
+
+    def summary(self):
+        hdf5_file = h5py.File(self.file_path, "r")
+        dset = hdf5_file["coords"]
+        for name, value in dset.attrs.items():
+            print(name, value)
+
+        # print("\nfeature extraction settings")
+        # print("target patch size: ", self.target_patch_size)
+        # print("pretrained: ", self.pretrained)
+        # print("transformations: ", self.roi_transforms)
+
+    def __getitem__(self, idx):
+        with h5py.File(self.file_path, "r") as hdf5_file:
+            coord = hdf5_file["coords"][idx]
+        img = self.wsi.read_region(
+            coord, self.patch_level, (self.patch_size, self.patch_size)
+        ).convert("RGB")
+
+        if self.target_patch_size is not None:
+            img = img.resize(self.target_patch_size)
+        img = self.roi_transforms(img).unsqueeze(0)
+        if self.target is None:
+            return img, coord
+        return img, self.target
+
+
+class ContourCheckingFn(object):
+    # Defining __call__ method
+    def __call__(self, pt):
+        raise NotImplementedError
+
+
+class isInContourV1(ContourCheckingFn):
+    def __init__(self, contour):
+        self.cont = contour
+
+    def __call__(self, pt):
+        return (
+            1
+            if cv2.pointPolygonTest(self.cont, tuple(np.array(pt).astype(float)), False)
+            >= 0
+            else 0
+        )
+
+
+class isInContourV2(ContourCheckingFn):
+    def __init__(self, contour, patch_size):
+        self.cont = contour
+        self.patch_size = patch_size
+
+    def __call__(self, pt):
+        pt = np.array(
+            (pt[0] + self.patch_size // 2, pt[1] + self.patch_size // 2)
+        ).astype(float)
+        return (
+            1
+            if cv2.pointPolygonTest(self.cont, tuple(np.array(pt).astype(float)), False)
+            >= 0
+            else 0
+        )
+
+
+# Easy version of 4pt contour checking function - 1 of 4 points need to be in the contour for test to pass
+class isInContourV3_Easy(ContourCheckingFn):
+    def __init__(self, contour, patch_size, center_shift=0.5):
+        self.cont = contour
+        self.patch_size = patch_size
+        self.shift = int(patch_size // 2 * center_shift)
+
+    def __call__(self, pt):
+        center = (pt[0] + self.patch_size // 2, pt[1] + self.patch_size // 2)
+        if self.shift > 0:
+            all_points = [
+                (center[0] - self.shift, center[1] - self.shift),
+                (center[0] + self.shift, center[1] + self.shift),
+                (center[0] + self.shift, center[1] - self.shift),
+                (center[0] - self.shift, center[1] + self.shift),
+            ]
+        else:
+            all_points = [center]
+
+        for points in all_points:
+            if (
+                cv2.pointPolygonTest(
+                    self.cont, tuple(np.array(points).astype(float)), False
+                )
+                >= 0
+            ):
+                return 1
+        return 0
+
+
+# Hard version of 4pt contour checking function - all 4 points need to be in the contour for test to pass
+class isInContourV3_Hard(ContourCheckingFn):
+    def __init__(self, contour, patch_size, center_shift=0.5):
+        self.cont = contour
+        self.patch_size = patch_size
+        self.shift = int(patch_size // 2 * center_shift)
+
+    def __call__(self, pt):
+        center = (pt[0] + self.patch_size // 2, pt[1] + self.patch_size // 2)
+        if self.shift > 0:
+            all_points = [
+                (center[0] - self.shift, center[1] - self.shift),
+                (center[0] + self.shift, center[1] + self.shift),
+                (center[0] + self.shift, center[1] - self.shift),
+                (center[0] - self.shift, center[1] + self.shift),
+            ]
+        else:
+            all_points = [center]
+
+        for points in all_points:
+            if (
+                cv2.pointPolygonTest(
+                    self.cont, tuple(np.array(points).astype(float)), False
+                )
+                < 0
+            ):
+                return 0
+        return 1
 
 
 def filter_kwargs_by_callable(
-    kwargs: tp.Dict[str, tp.Any], callabl: tp.Callable, exclude: tp.List[str] = None
+    kwargs: tp.Dict[str, tp.Any],
+    callabl: tp.Callable,
+    exclude: tp.List[str] | None = None,
 ) -> tp.Dict[str, tp.Any]:
     """Filter a dictionary keeping only the keys which are part of a function signature."""
     from inspect import signature
@@ -107,10 +254,22 @@ def filter_kwargs_by_callable(
     return {k: v for k, v in kwargs.items() if (k in args) and k not in (exclude or [])}
 
 
-def collate_MIL(batch):
-    img = torch.cat([item[0] for item in batch], dim=0)
-    label = torch.LongTensor([item[1] for item in batch])
-    return [img, label]
+def screen_coords(scores, coords, top_left, bot_right):
+    bot_right = np.array(bot_right)
+    top_left = np.array(top_left)
+    mask = np.logical_and(
+        np.all(coords >= top_left, axis=1), np.all(coords <= bot_right, axis=1)
+    )
+    scores = scores[mask]
+    coords = coords[mask]
+    return scores, coords
+
+
+def to_percentiles(scores):
+    from scipy.stats import rankdata
+
+    scores = rankdata(scores, "average") / len(scores) * 100
+    return scores
 
 
 def collate_features(batch, with_coords: bool = False):
@@ -121,177 +280,17 @@ def collate_features(batch, with_coords: bool = False):
     return [img, coords]
 
 
-def get_split_loader(split_dataset, training=False, testing=False, weighted=False):
-    """
-    return either the validation loader or training loader
-    """
-    kwargs = {"num_workers": 4} if device.type == "cuda" else {}
-    if not testing:
-        if training:
-            if weighted:
-                weights = make_weights_for_balanced_classes_split(split_dataset)
-                loader = DataLoader(
-                    split_dataset,
-                    batch_size=1,
-                    sampler=WeightedRandomSampler(weights, len(weights)),
-                    collate_fn=collate_MIL,
-                    **kwargs,
-                )
-            else:
-                loader = DataLoader(
-                    split_dataset,
-                    batch_size=1,
-                    sampler=RandomSampler(split_dataset),
-                    collate_fn=collate_MIL,
-                    **kwargs,
-                )
-        else:
-            loader = DataLoader(
-                split_dataset,
-                batch_size=1,
-                sampler=SequentialSampler(split_dataset),
-                collate_fn=collate_MIL,
-                **kwargs,
-            )
+def is_url(url: str | Path) -> bool:
+    import pathlib
 
-    else:
-        ids = np.random.choice(
-            np.arange(len(split_dataset), int(len(split_dataset) * 0.1)), replace=False
-        )
-        loader = DataLoader(
-            split_dataset,
-            batch_size=1,
-            sampler=SubsetSequentialSampler(ids),
-            collate_fn=collate_MIL,
-            **kwargs,
-        )
-
-    return loader
-
-
-def get_optim(model, args):
-    if args.opt == "adam":
-        optimizer = optim.Adam(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=args.lr,
-            weight_decay=args.reg,
-        )
-    elif args.opt == "sgd":
-        optimizer = optim.SGD(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=args.lr,
-            momentum=0.9,
-            weight_decay=args.reg,
-        )
-    else:
-        raise NotImplementedError
-    return optimizer
-
-
-def print_network(net):
-    num_params = 0
-    num_params_train = 0
-    print(net)
-
-    for param in net.parameters():
-        n = param.numel()
-        num_params += n
-        if param.requires_grad:
-            num_params_train += n
-
-    print("Total number of parameters: %d" % num_params)
-    print("Total number of trainable parameters: %d" % num_params_train)
-
-
-def generate_split(
-    cls_ids,
-    val_num,
-    test_num,
-    samples,
-    n_splits=5,
-    seed=7,
-    label_frac=1.0,
-    custom_test_ids=None,
-):
-    indices = np.arange(samples).astype(int)
-
-    if custom_test_ids is not None:
-        indices = np.setdiff1d(indices, custom_test_ids)
-
-    np.random.seed(seed)
-    for i in range(n_splits):
-        all_val_ids = []
-        all_test_ids = []
-        sampled_train_ids = []
-
-        if custom_test_ids is not None:  # pre-built test split, do not need to sample
-            all_test_ids.extend(custom_test_ids)
-
-        for c in range(len(val_num)):
-            possible_indices = np.intersect1d(
-                cls_ids[c], indices
-            )  # all indices of this class
-            val_ids = np.random.choice(
-                possible_indices, val_num[c], replace=False
-            )  # validation ids
-
-            remaining_ids = np.setdiff1d(
-                possible_indices, val_ids
-            )  # indices of this class left after validation
-            all_val_ids.extend(val_ids)
-
-            if custom_test_ids is None:  # sample test split
-                test_ids = np.random.choice(remaining_ids, test_num[c], replace=False)
-                remaining_ids = np.setdiff1d(remaining_ids, test_ids)
-                all_test_ids.extend(test_ids)
-
-            if label_frac == 1:
-                sampled_train_ids.extend(remaining_ids)
-
-            else:
-                sample_num = math.ceil(len(remaining_ids) * label_frac)
-                slice_ids = np.arange(sample_num)
-                sampled_train_ids.extend(remaining_ids[slice_ids])
-
-        yield sampled_train_ids, all_val_ids, all_test_ids
-
-
-def nth(iterator, n, default=None):
-    if n is None:
-        return collections.deque(iterator, maxlen=0)
-    else:
-        return next(islice(iterator, n, None), default)
-
-
-def calculate_error(Y_hat, Y):
-    error = 1.0 - Y_hat.float().eq(Y.float()).float().mean().item()
-
-    return error
-
-
-def make_weights_for_balanced_classes_split(dataset):
-    N = float(len(dataset))
-    weight_per_class = [
-        N / len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))
-    ]
-    weight = [0] * int(N)
-    for idx in range(len(dataset)):
-        y = dataset.getlabel(idx)
-        weight[idx] = weight_per_class[y]
-
-    return torch.DoubleTensor(weight)
-
-
-def is_url(url: str) -> bool:
+    if isinstance(url, Path | pathlib.Path):
+        url = url.as_posix()
     return url.startswith("http")
 
 
 def download_file(
     url: str, dest: Path | str | None = None, overwrite: bool = False
 ) -> Path:
-    import tempfile
-    import requests
-
     if dest is None:
         dest = Path(tempfile.NamedTemporaryFile().name)
 
@@ -305,3 +304,59 @@ def download_file(
         for chunk in response.iter_content(chunk_size=8192):
             f.write(chunk)
     return Path(dest)
+
+
+def default_transforms(pretrained=False):
+    if pretrained:
+        mean = (0.485, 0.456, 0.406)
+        std = (0.229, 0.224, 0.225)
+    else:
+        mean = (0.5, 0.5, 0.5)
+        std = (0.5, 0.5, 0.5)
+
+    trnsfrms_val = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
+    )
+
+    return trnsfrms_val
+
+
+def save_pkl(filename, save_object):
+    writer = open(filename, "wb")
+    pickle.dump(save_object, writer)
+    writer.close()
+
+
+def load_pkl(filename):
+    loader = open(filename, "rb")
+    file = pickle.load(loader)
+    loader.close()
+    return file
+
+
+def save_hdf5(output_path, asset_dict, attr_dict=None, mode="a"):
+    file = h5py.File(output_path, mode)
+    for key, val in asset_dict.items():
+        data_shape = val.shape
+        if key not in file:
+            data_type = val.dtype
+            chunk_shape = (1,) + data_shape[1:]
+            maxshape = (None,) + data_shape[1:]
+            dset = file.create_dataset(
+                key,
+                shape=data_shape,
+                maxshape=maxshape,
+                chunks=chunk_shape,
+                dtype=data_type,
+            )
+            dset[:] = val
+            if attr_dict is not None:
+                if key in attr_dict.keys():
+                    for attr_key, attr_val in attr_dict[key].items():
+                        dset.attrs[attr_key] = attr_val
+        else:
+            dset = file[key]
+            dset.resize(len(dset) + data_shape[0], axis=0)
+            dset[-data_shape[0] :] = val
+    file.close()
+    return output_path
