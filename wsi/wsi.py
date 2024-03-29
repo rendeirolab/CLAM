@@ -2,7 +2,7 @@ import multiprocessing as mp
 import math
 import time
 import typing as tp
-from pathlib import Path as _Path
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -11,7 +11,6 @@ from PIL import Image
 import h5py
 
 from .utils import (
-    Path,
     isInContourV1,
     isInContourV2,
     isInContourV3_Easy,
@@ -88,7 +87,7 @@ class WholeSlideImage(object):
 
         if not isinstance(path, Path):
             if is_url(path):
-                path = download_file(path)
+                path = download_file(str(path))
             path = Path(path)
         self.path = path
         self.attributes = attributes
