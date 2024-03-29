@@ -27,10 +27,14 @@ from .utils import (
 Image.MAX_IMAGE_PIXELS = 933120000
 
 
+# TODO: replace contours_tumor with a generic label field
+# TODO: make function to plot contours (colored by label field)
+
+
 class WholeSlideImage(object):
     def __init__(
         self,
-        path: Path | _Path | str,
+        path: Path | str,
         *,
         attributes: tp.Optional[dict[str, tp.Any]] = None,
         mask_file: Path | None = None,
@@ -847,7 +851,7 @@ class WholeSlideImage(object):
     def save_tile_images(
         self,
         output_dir: Path,
-        format: str = "jpg",
+        output_format: str = "jpg",
         attributes: bool = True,
         n: int | None = None,
         frac: float = 1.0,
@@ -859,7 +863,7 @@ class WholeSlideImage(object):
         ----------
         output_dir: Path
             Directory to save tile images to.
-        format: str
+        output_format: str
             File format to save images as.
         attributes: bool
             Whether to include attributes in filename.
@@ -900,8 +904,8 @@ class WholeSlideImage(object):
         sel = pd.Series(range(nc)).sample(frac=frac, n=n).values
 
         for coord in coords[sel]:
-            # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.format
-            fp = output_dir / (output_prefix + f".{coord[0]}.{coord[1]}.{format}")
+            # Output in the form of: slide_name.attr[0].attr[1].attr[n].x.y.output_format
+            fp = output_dir / (output_prefix + f".{coord[0]}.{coord[1]}.{output_format}")
             img = self.wsi.read_region(coord, level=level, size=(size, size))
             img.convert("RGB").save(fp)
 
