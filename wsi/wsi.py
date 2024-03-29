@@ -29,6 +29,7 @@ Image.MAX_IMAGE_PIXELS = 933120000
 
 # TODO: replace contours_tumor with a generic label field
 # TODO: make function to plot contours (colored by label field)
+# TODO: replace pickle with geojson or hdf5
 
 
 class WholeSlideImage(object):

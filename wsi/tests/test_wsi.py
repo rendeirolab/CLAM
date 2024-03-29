@@ -19,7 +19,7 @@ def get_test_slide():
     path = Path(tempfile.NamedTemporaryFile().name)
 
     with open(path, "wb") as file:
-        for chunk in requests.get(url, stream=True).iter_content(chunk_size=1024):
+        for chunk in requests.get(url, stream=True).iter_content(chunk_size=1024 * 4):
             file.write(chunk)
     return path
 
