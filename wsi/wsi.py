@@ -10,7 +10,7 @@ import openslide
 from PIL import Image
 import h5py
 
-from .utils import (
+from wsi.utils import (
     isInContourV1,
     isInContourV2,
     isInContourV3_Easy,
@@ -518,6 +518,7 @@ class WholeSlideImage(object):
         """
         import skimage
         import scipy.ndimage as ndi
+        import shapely
 
         assert color_space in ["RGB", "HED"], "color_space must be RGB or HED."
 
@@ -584,6 +585,18 @@ class WholeSlideImage(object):
 
         self.contours_tissue = [x[:, np.newaxis, :] for x in contours_tissue]
         self.holes_tissue = [x[:, np.newaxis, :] for x in holes_tissue]
+
+        conts = {
+            i: shapely.Polygon(cont.squeeze())
+            for i, cont in enumerate(self.contours_tissue)
+        }
+        new_holes = [[] for _ in range(len(self.contours_tissue))]
+        for hole in self.holes_tissue:
+            h = shapely.Polygon(hole.squeeze())
+            for i, cont in conts.items():
+                if h.intersects(cont):
+                    new_holes[i].append(hole)
+        self.holes_tissue = new_holes
 
         assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
         self.save_segmentation()
@@ -705,7 +718,7 @@ class WholeSlideImage(object):
         step_size: int
             Step size between patches in pixels.
         contour_subset: list[int]
-            1-based index of which contours to use. If None, use all contours.
+            Index of which contours to use (0-based). If None, use all contours.
 
         Returns
         -------
@@ -715,7 +728,11 @@ class WholeSlideImage(object):
 
         if contour_subset is not None:
             original_contours = copy(self.contours_tissue)
-            self.contours_tissue = [self.contours_tissue[i - 1] for i in contour_subset]
+            self.contours_tissue = [self.contours_tissue[i] for i in contour_subset]
+
+        if contour_subset is not None:
+            original_holes = copy(self.holes_tissue)
+            self.holes_tissue = [self.holes_tissue[i] for i in contour_subset]
 
         self._process_contours(
             patch_level=patch_level, patch_size=patch_size, step_size=step_size
@@ -723,6 +740,7 @@ class WholeSlideImage(object):
 
         if contour_subset is not None:
             self.contours_tissue = original_contours
+            self.holes_tissue = original_holes
 
     def has_tile_coords(self) -> bool:
         """

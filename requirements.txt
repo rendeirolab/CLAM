@@ -9,6 +9,7 @@ requests
 scikit-image
 scikit-learn
 scipy
+shapely
 torch
 torchvision
 tqdm
