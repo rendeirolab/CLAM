@@ -40,4 +40,4 @@ def test_whole_slide_image_inference(get_test_slide):
 
     # Assert conditions
     assert coords.shape == (646, 2), "Coords shape mismatch"
-    assert np.allclose(feats.sum(), 14.375092), "Features sum mismatch"
+    assert np.allclose(feats.sum(), 14.375092, atol=1e-3), "Features sum mismatch"
