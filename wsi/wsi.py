@@ -1400,11 +1400,10 @@ class WholeSlideImage(object):
         return tissue_mask
 
     def as_tile_bag(self):
-        # from .utils import Whole_Slide_Bag
-        from .utils import Whole_Slide_Bag_FP
+        from .utils import WholeSlideBag
 
         # dataset = Whole_Slide_Bag(self.hdf5_file, pretrained=True)
-        dataset = Whole_Slide_Bag_FP(
+        dataset = WholeSlideBag(
             self.hdf5_file, self.wsi, pretrained=True, target=self.target
         )
         return dataset

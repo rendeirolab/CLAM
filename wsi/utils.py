@@ -6,17 +6,18 @@ import pickle
 import requests
 import h5py
 import numpy as np
+import openslide
 import cv2
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
 
-class Whole_Slide_Bag_FP(Dataset):
+class WholeSlideBag(Dataset):
     def __init__(
         self,
         file_path,
-        wsi,
+        wsi=None,
         pretrained=False,
         custom_transforms=None,
         custom_downsample=1,
@@ -34,6 +35,8 @@ class Whole_Slide_Bag_FP(Dataset):
         self.target = target
 
         self.pretrained = pretrained
+        if wsi is None:
+            wsi = openslide.open_slide(path)
         self.wsi = wsi
         if not custom_transforms:
             self.roi_transforms = default_transforms(pretrained=pretrained)
