@@ -1,7 +1,6 @@
 import typing as tp
 from pathlib import Path
 import tempfile
-import pickle
 
 import requests
 import h5py
@@ -260,19 +259,6 @@ def default_transforms(pretrained=False):
     )
 
     return trnsfrms_val
-
-
-def save_pkl(filename, save_object):
-    writer = open(filename, "wb")
-    pickle.dump(save_object, writer)
-    writer.close()
-
-
-def load_pkl(filename):
-    loader = open(filename, "rb")
-    file = pickle.load(loader)
-    loader.close()
-    return file
 
 
 def save_hdf5(output_path, asset_dict, attr_dict=None, mode="a"):

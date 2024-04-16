@@ -17,8 +17,6 @@ from wsi.utils import (
     isInContourV3_Hard,
     ContourCheckingFn,
     save_hdf5,
-    load_pkl,
-    save_pkl,
     screen_coords,
     to_percentiles,
     filter_kwargs_by_callable,
@@ -29,7 +27,7 @@ Image.MAX_IMAGE_PIXELS = 933120000
 
 # TODO: replace contours_tumor with a generic label field
 # TODO: make function to plot contours (colored by label field)
-# TODO: replace pickle with geojson or hdf5
+# TODO: write segmentations to geojson
 
 
 class WholeSlideImage(object):
@@ -38,7 +36,6 @@ class WholeSlideImage(object):
         path: Path | str,
         *,
         attributes: tp.Optional[dict[str, tp.Any]] = None,
-        mask_file: Path | None = None,
         hdf5_file: Path | None = None,
     ):
         """
@@ -51,8 +48,6 @@ class WholeSlideImage(object):
             If URL is given, the file will be downloaded to a temporary directory in the filesystem.
         attributes: dict[str, tp.Any]
             Optional dictionary with attributes to store in the object.
-        mask_file: Path
-            Path to file used to save segmentation. Default is `path.with_suffix(".segmentation.pickle")`.
         hdf5_file: Path
             Path to file used to save tile coordinates (and images). Default is `path.with_suffix(".h5")`.
 
@@ -78,8 +73,6 @@ class WholeSlideImage(object):
             List of tumor contours.
         holes_tissue: list[np.ndarray]
             List of holes in tissue contours.
-        mask_file: Path
-            Path to file used to save segmentation.
         target: None
             Placeholder for target (e.g. label) for the WSI.
 
@@ -105,9 +98,6 @@ class WholeSlideImage(object):
         self.contours_tumor: list[np.ndarray] | None = None
         self.holes_tissue: list[np.ndarray] | None = None
         # UNUSED: self.holes_tumor: list[np.ndarray] | None = None
-        self.mask_file: Path = (
-            path.with_suffix(".segmentation.pickle") if mask_file is None else mask_file
-        )
         self.hdf5_file: Path = path.with_suffix(".h5") if hdf5_file is None else hdf5_file
 
         self.target = None
@@ -115,49 +105,70 @@ class WholeSlideImage(object):
     def __repr__(self):
         return f"WholeSlideImage('{self.path}')"
 
-    def _init_segmentation(self, mask_file: Path | str | None = None):
-        if mask_file is None:
-            mask_file = self.mask_file
-        # load segmentation results from pickle file
-        asset_dict = load_pkl(mask_file)
-        self.holes_tissue = asset_dict["holes"]
-        self.contours_tissue = asset_dict["tissue"]
-
-    def load_segmentation(self, mask_file: Path | str | None = None):
+    def load_segmentation(self, hdf5_file: Path | None = None) -> None:
         """
         Load slide segmentation results from pickle file.
 
         Parameters
         ----------
-        mask_file: Path
+        hdf5_file: Path
             Path to file used to save segmentation.
-            If None, the segmentation results will be loaded from `self.mask_file`.
+            If None, the segmentation results will be loaded from `self.hdf5_file`.
 
         Returns
         -------
         None
         """
-        self._init_segmentation(mask_file)
+        if hdf5_file is None:
+            hdf5_file = self.hdf5_file
 
-    def save_segmentation(self, mask_file: Path | str | None = None):
+        with h5py.File(hdf5_file, "r") as f:
+            bpt = f["contours_tissue_breakpoints"][()]
+            ct = f["contours_tissue"][()]
+            self.contours_tissue = [
+                ct[bpt[i] : bpt[i + 1]] for i in range(bpt.shape[0] - 1)
+            ]
+
+            bph = f["holes_tissue_breakpoints"][()]
+            ht = f["holes_tissue"][()]
+            holes_tissue = list()
+            for b in bph:
+                res = []
+                for i in range(b.shape[0] - 1):
+                    if b[i + 1] != 0:
+                        res.append(ht[b[i] : b[i + 1]])
+                holes_tissue.append(res)
+            self.holes_tissue = holes_tissue
+
+    def save_segmentation(self, hdf5_file: Path | None = None, mode: str = "a") -> None:
         """
         Save slide segmentation results to pickle file.
 
         Parameters
         ----------
-        mask_file: Path
+        hdf5_file: Path
             Path to file used to save segmentation.
-            If None, the segmentation results will be loaded from `self.mask_file`.
+            If None, the segmentation results will be loaded from `self.hdf5_file`.
 
         Returns
         -------
         None
         """
-        if mask_file is None:
-            mask_file = self.mask_file
-        # save segmentation results using pickle
-        asset_dict = {"holes": self.holes_tissue, "tissue": self.contours_tissue}
-        save_pkl(mask_file, asset_dict)
+        if hdf5_file is None:
+            hdf5_file = self.hdf5_file
+        with h5py.File(self.hdf5_file, mode) as f:
+            data = np.concatenate(self.contours_tissue)
+            f.create_dataset("contours_tissue", data=data)
+            bpt = [0] + np.cumsum([c.shape[0] for c in self.contours_tissue]).tolist()
+            f.create_dataset("contours_tissue_breakpoints", data=bpt)
+
+            holes = [h if h else [np.empty((0, 1, 2))] for h in self.holes_tissue]
+            bph = [[0] + np.cumsum([h.shape[0] for h in c]).tolist() for c in holes]
+            n = max([len(_h) for _h in bph])
+            bph = np.asarray([_h + [0] * (n - len(_h)) for _h in bph]).reshape(-1, n)
+            holesc = np.concatenate([np.concatenate(c) for c in holes])
+            f.create_dataset("holes_tissue", data=holesc)
+            f.create_dataset("holes_tissue_breakpoints", data=bph)
 
     def _segment_tissue(
         self,
@@ -266,7 +277,6 @@ class WholeSlideImage(object):
         self.contours_tissue = self._scale_contour_dim(foreground_contours, scale)
         self.holes_tissue = self._scale_holes_dim(hole_contours, scale)
 
-        # exclude_ids = [0,7,9]
         if len(keep_ids) > 0:
             contour_ids = set(keep_ids) - set(exclude_ids)
         else:
@@ -526,7 +536,7 @@ class WholeSlideImage(object):
             return (x - np.min(x)) / (np.max(x) - np.min(x))
 
         if output_file is None:
-            output_file = self.mask_file.with_suffix(".pca.png")
+            output_file = self.hdf5_file.with_suffix(".pca.png")
 
         # Work with thubnail by default
         level = self.wsi.level_count - 1
@@ -798,6 +808,20 @@ class WholeSlideImage(object):
         if contour_subset is not None:
             self.contours_tissue = original_contours
             self.holes_tissue = original_holes
+
+    def has_tissue_contours(self) -> bool:
+        """
+        Check if the WSI has tissue contours saved in its HDF5 file.
+
+        Returns
+        -------
+        bool
+            True if it exists
+        """
+        if not self.hdf5_file.exists():
+            return False
+        with h5py.File(self.hdf5_file, "r") as h5:
+            return "contours_tissue" in h5
 
     def has_tile_coords(self) -> bool:
         """
