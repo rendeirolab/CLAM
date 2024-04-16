@@ -124,9 +124,35 @@ class WholeSlideImage(object):
         self.contours_tissue = asset_dict["tissue"]
 
     def load_segmentation(self, mask_file: Path | str | None = None):
+        """
+        Load slide segmentation results from pickle file.
+
+        Parameters
+        ----------
+        mask_file: Path
+            Path to file used to save segmentation.
+            If None, the segmentation results will be loaded from `self.mask_file`.
+
+        Returns
+        -------
+        None
+        """
         self._init_segmentation(mask_file)
 
     def save_segmentation(self, mask_file: Path | str | None = None):
+        """
+        Save slide segmentation results to pickle file.
+
+        Parameters
+        ----------
+        mask_file: Path
+            Path to file used to save segmentation.
+            If None, the segmentation results will be loaded from `self.mask_file`.
+
+        Returns
+        -------
+        None
+        """
         if mask_file is None:
             mask_file = self.mask_file
         # save segmentation results using pickle
@@ -251,20 +277,56 @@ class WholeSlideImage(object):
 
     def vis_wsi(
         self,
-        vis_level=0,
-        color=(0, 255, 0),
-        hole_color=(0, 0, 255),
-        annot_color=(255, 0, 0),
-        line_thickness=250,
-        max_size=None,
-        top_left=None,
-        bot_right=None,
-        custom_downsample=1,
-        view_slide_only=False,
-        number_contours=False,
-        seg_display=True,
-        annot_display=True,
-    ):
+        vis_level: int = 0,
+        color: tuple[int, int, int] = (0, 255, 0),
+        hole_color: tuple[int, int, int] = (0, 0, 255),
+        annot_color: tuple[int, int, int] = (255, 0, 0),
+        line_thickness: float = 250.0,
+        max_size: int = None,
+        top_left: tuple[int, int] = None,
+        bot_right: tuple[int, int] = None,
+        custom_downsample: float = 1.0,
+        view_slide_only: bool = False,
+        number_contours: bool = False,
+        seg_display: bool = True,
+        annot_display: bool = True,
+    ) -> None:
+        """
+            Visualize the whole slide image.
+
+            Parameters
+            ----------
+        vis_level: int
+            The level to visualize.
+        color: tuple
+            The color of the tissue.
+        hole_color: tuple
+            The color of the holes.
+        annot_color: tuple
+            The color of the annotations.
+        line_thickness: int
+            The thickness of the annotations.
+        max_size: int
+            The maximum size of the image.
+        top_left: tuple
+            The top left corner of the region to visualize.
+        bot_right: tuple[int, int]: tuple
+            The bottom right corner of the region to visualize.
+        custom_downsample: int
+            The custom downsample factor.
+        view_slide_only: bool
+            Whether to only visualize the slide.
+        number_contours: bool
+            Whether to number the contours.
+        seg_display: bool
+            Whether to display the segmentation.
+        annot_display: bool
+            Whether to display the annotations.
+
+            Returns
+            -------
+            None
+        """
         downsample = self.level_downsamples[vis_level]
         scale = [1 / downsample[0], 1 / downsample[1]]
 
