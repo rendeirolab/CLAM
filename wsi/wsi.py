@@ -560,6 +560,12 @@ class WholeSlideImage(object):
         fig.savefig(output_file, bbox_inches="tight", dpi=200, pad_inches=0.0)
         plt.close(fig)
 
+    def _get_best_level(self, target_dimensions: tuple[int, int] = (2000, 2000)) -> int:
+        g = np.absolute(
+            (np.asarray(self.wsi.level_dimensions) - np.asarray(target_dimensions))
+        ).sum(1)
+        return np.argmin(g)
+
     def _segment_tissue_manual(
         self, level: int | None = None, color_space: str = "RGB"
     ) -> None:
@@ -586,15 +592,7 @@ class WholeSlideImage(object):
 
         # Work with thumbnail by default
         if level is None:
-            # level = self.wsi.level_count - 1
-            # Find level with dimension closest to 2000x2000
-            level = (
-                np.absolute(
-                    np.asarray(self.wsi.level_dimensions) - np.asarray([(2000, 2000)])
-                )
-                .mean(1)
-                .argmin()
-            )
+            level = self._get_best_level((2000, 2000))
         thumbnail = np.array(
             self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
         )
@@ -722,10 +720,7 @@ class WholeSlideImage(object):
                 }
 
             if "seg_level" not in params:
-                g = np.absolute(
-                    (np.asarray(self.wsi.level_dimensions) - np.asarray([1000, 1000]))
-                ).sum(1)
-                params["seg_level"] = np.argmin(g)
+                params["seg_level"] = self._get_best_level((1000, 1000))
 
             kwargs = filter_kwargs_by_callable(params, self._segment_tissue)
             fkwargs = {k: v for k, v in params.items() if k not in kwargs}
@@ -757,7 +752,7 @@ class WholeSlideImage(object):
         if output_file is None:
             output_file = self.path.with_suffix(".segmentation.png")
 
-        level = self.wsi.level_count - 1
+        level = self._get_best_level((2000, 2000))
         self.vis_wsi(vis_level=level, **kwargs).save(output_file)
 
     def tile(
