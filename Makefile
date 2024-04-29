@@ -8,6 +8,8 @@ clean:
 	-rm -rf joblib
 	-rm -rf __pycache__
 	-rm -rf .mypy_cache
+	-rm -rf htmlcov
+	-rm coverage.xml
 	# -rm -rf .pytest_cache
 
 test: clean

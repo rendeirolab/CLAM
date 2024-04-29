@@ -577,7 +577,14 @@ class WholeSlideImage(object):
         return np.argmin(g)
 
     def _segment_tissue_manual(
-        self, level: int | None = None, color_space: str = "RGB"
+        self,
+        level: int | None = None,
+        color_space: str = "RGB",
+        otsu_threshold_relaxation: float = 0,
+        small_object_threshold: int = 200,
+        fill_holes_threshold: int = 20,
+        polygon_contour_level: float = 0.5,
+        hole_object_threshold: int = 5000,
     ) -> None:
         """
         Segment the tissue using manually optimized parameters.
@@ -614,30 +621,40 @@ class WholeSlideImage(object):
             hed = rgb2hed(thumbnail)
             thumbnail = hed[..., :-1].min(-1)
             # Threshold for bright
-            m = thumbnail > skimage.filters.threshold_otsu(thumbnail)
+            t = skimage.filters.threshold_otsu(thumbnail)
+            m = thumbnail > (t - t * otsu_threshold_relaxation)
         elif color_space == "RGB":
             # Work in mean RGB space
             thumbnail = thumbnail.mean(-1)
             # Threshold for dark
-            m = thumbnail < skimage.filters.threshold_otsu(thumbnail)
+            t = skimage.filters.threshold_otsu(thumbnail)
+            m = thumbnail < (t + t * otsu_threshold_relaxation)
 
         # Dilate mask
         m = skimage.morphology.dilation(m, skimage.morphology.disk(2))
 
         # Remove small objects
-        m = skimage.morphology.remove_small_objects(m, 500, connectivity=1)
+        m = skimage.morphology.remove_small_objects(
+            m, m.size // small_object_threshold, connectivity=1
+        )
 
         # Fill holes (for contour)
-        mask = ~skimage.morphology.remove_small_objects(~m, m.size // 2, connectivity=1)
+        mask = ~skimage.morphology.remove_small_objects(
+            ~m, m.size // fill_holes_threshold, connectivity=1
+        )
         # Get polygon contours from binary mask
-        contours_tissue = skimage.measure.find_contours(mask, 0.5, fully_connected="high")
+        contours_tissue = skimage.measure.find_contours(
+            mask, polygon_contour_level, fully_connected="high"
+        )
 
         # Get holes
         holes, _ = ndi.label(~m)
         # # remove largest one (which should be the background)
         holes[holes == 1] = 0
-        holes = skimage.morphology.remove_small_objects(holes, 50, connectivity=1)
-        holes_tissue = skimage.measure.find_contours(holes, 0.5, fully_connected="high")
+        holes = skimage.morphology.remove_small_objects(
+            holes, m.size // hole_object_threshold, connectivity=1
+        )
+        holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
 
         # Scale up to size of original image
         # # Reverse axis order
@@ -650,7 +667,7 @@ class WholeSlideImage(object):
             for cont in holes_tissue
         ]
 
-        # TODO: Important! Pair holes and contours by checking which holes are in which tissue pieces
+        # Important! Pair holes and contours by checking which holes are in which tissue pieces
         # shape of holes_tissue must match contours_tissue, even if there are no holes
 
         self.contours_tissue = [x[:, np.newaxis, :] for x in contours_tissue]
@@ -673,8 +690,8 @@ class WholeSlideImage(object):
 
     def segment(
         self,
-        params: tp.Optional[dict[str, tp.Any]] = None,
         method: str = "manual",
+        params: tp.Optional[dict[str, tp.Any]] = None,
     ) -> None:
         """
         Segment the WSI for tissue and background.
