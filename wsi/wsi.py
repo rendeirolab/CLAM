@@ -581,9 +581,9 @@ class WholeSlideImage(object):
         level: int | None = None,
         color_space: str = "RGB",
         otsu_threshold_relaxation: float = 0,
+        dilation_diameter: float = 2.0,
         small_object_threshold: int = 200,
         fill_holes_threshold: int = 20,
-        polygon_contour_level: float = 0.5,
         hole_object_threshold: int = 5000,
     ) -> None:
         """
@@ -619,19 +619,25 @@ class WholeSlideImage(object):
             from skimage.color import rgb2hed
 
             hed = rgb2hed(thumbnail)
-            thumbnail = hed[..., :-1].min(-1)
+            thumbnailm = hed[..., :-1].min(-1)
             # Threshold for bright
-            t = skimage.filters.threshold_otsu(thumbnail)
-            m = thumbnail > (t - t * otsu_threshold_relaxation)
+            t = skimage.filters.threshold_otsu(thumbnailm)
+            m = thumbnailm > (t - t * otsu_threshold_relaxation)
         elif color_space == "RGB":
             # Work in mean RGB space
-            thumbnail = thumbnail.mean(-1)
+            thumbnailm = thumbnail.mean(-1)
             # Threshold for dark
-            t = skimage.filters.threshold_otsu(thumbnail)
-            m = thumbnail < (t + t * otsu_threshold_relaxation)
+            t = skimage.filters.threshold_otsu(thumbnailm)
+            m = thumbnailm < (t + t * otsu_threshold_relaxation)
 
         # Dilate mask
-        m = skimage.morphology.dilation(m, skimage.morphology.disk(2))
+        m = skimage.morphology.dilation(m, skimage.morphology.disk(dilation_diameter))
+
+        # Remove foreground overlapping the edges
+        m[0, :] = False
+        m[-1, :] = False
+        m[:, 0] = False
+        m[:, -1] = False
 
         # Remove small objects
         m = skimage.morphology.remove_small_objects(
@@ -643,9 +649,16 @@ class WholeSlideImage(object):
             ~m, m.size // fill_holes_threshold, connectivity=1
         )
         # Get polygon contours from binary mask
-        contours_tissue = skimage.measure.find_contours(
-            mask, polygon_contour_level, fully_connected="high"
-        )
+        # contours_tissue = skimage.measure.find_contours(mask, 0.5, fully_connected="high")
+        blobs_tissue = skimage.measure.label(mask, background=0)
+        tprops = skimage.measure.regionprops(blobs_tissue)
+        contours_tissue = [
+            np.concatenate(
+                skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
+            )
+            + p.bbox[:2]
+            for p in tprops
+        ]
 
         # Get holes
         holes, _ = ndi.label(~m)
@@ -654,7 +667,15 @@ class WholeSlideImage(object):
         holes = skimage.morphology.remove_small_objects(
             holes, m.size // hole_object_threshold, connectivity=1
         )
-        holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
+        # holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
+        hprops = skimage.measure.regionprops(holes)
+        holes_tissue = [
+            np.concatenate(
+                skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
+            )
+            + p.bbox[:2]
+            for p in hprops
+        ]
 
         # Scale up to size of original image
         # # Reverse axis order
@@ -687,6 +708,38 @@ class WholeSlideImage(object):
 
         assert len(self.contours_tissue) > 0, "Segmentation could not find tissue!"
         self.save_segmentation()
+        return None
+
+        # # Viz during development:
+        # import matplotlib.pyplot as plt
+
+        # fig, axes = plt.subplots(1, 6, figsize=(30, 5))
+        # axes[0].imshow(thumbnail, rasterized=True)
+        # axes[0].axis("off")
+        # axes[0].set_title("Original")
+        # axes[1].imshow(thumbnailm, rasterized=True)
+        # axes[1].axis("off")
+        # axes[1].set_title("Mean")
+        # axes[2].imshow(m, rasterized=True)
+        # axes[2].axis("off")
+        # axes[2].set_title("pre-Mask")
+        # axes[3].imshow(mask, rasterized=True)
+        # axes[3].axis("off")
+        # axes[3].set_title("Mask")
+        # axes[4].imshow(holes > 0, rasterized=True)
+        # axes[4].axis("off")
+        # axes[4].set_title("Holes")
+        # axes[5].imshow(thumbnail, rasterized=True)
+        # colors = ["green", "orange", "purple"]
+        # for col, cont in zip(colors, contours_tissue):
+        #     axes[5].plot(*cont.squeeze().T, color=col)
+        # for hole in holes_tissue:
+        #     axes[5].plot(*hole.squeeze().T, color="black")
+        # axes[5].axis("off")
+        # axes[5].set_title("Trace")
+        # fig.tight_layout()
+        # # fig.savefig("test.png")
+        # return fig
 
     def segment(
         self,
