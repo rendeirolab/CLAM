@@ -667,7 +667,9 @@ class WholeSlideImage(object):
         holes = skimage.morphology.remove_small_objects(
             holes, m.size // hole_object_threshold, connectivity=1
         )
-        holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
+        holes_tissue = skimage.measure.find_contours(
+            holes > 1, 0.5, fully_connected="high"
+        )
         # hprops = skimage.measure.regionprops(holes)
         # holes_tissue = [
         #     np.concatenate(
