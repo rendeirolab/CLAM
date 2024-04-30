@@ -649,16 +649,16 @@ class WholeSlideImage(object):
             ~m, m.size // fill_holes_threshold, connectivity=1
         )
         # Get polygon contours from binary mask
-        # contours_tissue = skimage.measure.find_contours(mask, 0.5, fully_connected="high")
-        blobs_tissue = skimage.measure.label(mask, background=0)
-        tprops = skimage.measure.regionprops(blobs_tissue)
-        contours_tissue = [
-            np.concatenate(
-                skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
-            )
-            + p.bbox[:2]
-            for p in tprops
-        ]
+        contours_tissue = skimage.measure.find_contours(mask, 0.5, fully_connected="high")
+        # blobs_tissue = skimage.measure.label(mask, background=0)
+        # tprops = skimage.measure.regionprops(blobs_tissue)
+        # contours_tissue = [
+        #     np.concatenate(
+        #         skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
+        #     )
+        #     + p.bbox[:2]
+        #     for p in tprops
+        # ]
 
         # Get holes
         holes, _ = ndi.label(~m)
@@ -667,15 +667,15 @@ class WholeSlideImage(object):
         holes = skimage.morphology.remove_small_objects(
             holes, m.size // hole_object_threshold, connectivity=1
         )
-        # holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
-        hprops = skimage.measure.regionprops(holes)
-        holes_tissue = [
-            np.concatenate(
-                skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
-            )
-            + p.bbox[:2]
-            for p in hprops
-        ]
+        holes_tissue = skimage.measure.find_contours(holes, fully_connected="high")
+        # hprops = skimage.measure.regionprops(holes)
+        # holes_tissue = [
+        #     np.concatenate(
+        #         skimage.measure.find_contours(p.image, 0.5, fully_connected="high")
+        #     )
+        #     + p.bbox[:2]
+        #     for p in hprops
+        # ]
 
         # Scale up to size of original image
         # # Reverse axis order
