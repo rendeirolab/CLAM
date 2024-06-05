@@ -899,7 +899,7 @@ class WholeSlideImage(object):
 
     def has_tissue_contours(self) -> bool:
         """
-        Check if the WSI has tissue contours saved in its HDF5 file.
+        Check if the WSI has tissue contours saved.
 
         Returns
         -------
@@ -908,6 +908,9 @@ class WholeSlideImage(object):
         """
         if not self.hdf5_file.exists():
             return False
+        if self.contours_tissue is not None:
+            if isinstance(self.contours_tissue, list):
+                return isinstance(self.contours_tissue[0], np.ndarray)
         with h5py.File(self.hdf5_file, "r") as h5:
             return "contours_tissue" in h5
 
