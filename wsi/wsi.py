@@ -576,6 +576,22 @@ class WholeSlideImage(object):
         ).sum(1)
         return np.argmin(g)
 
+    def get_thumbnail(self, level: int | None = None) -> np.ndarray:
+        """
+        Get array representing a low resolution image of the whole slide image.
+
+        Parameters
+        ----------
+        level: int
+            Which pyramid level to retrieve image at.
+        """
+        if level is None:
+            level = self._get_best_level((2000, 2000))
+        thumbnail = np.array(
+            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+        )
+        return thumbnail
+
     def _segment_tissue_manual(
         self,
         level: int | None = None,
