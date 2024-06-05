@@ -182,7 +182,7 @@ class WholeSlideImage(object):
         ref_patch_size=512,
         exclude_ids=[],
         keep_ids=[],
-    ):
+    ) -> None:
         """
         Segment the tissue via HSV -> Median thresholding -> Binary threshold
         """
@@ -968,6 +968,137 @@ class WholeSlideImage(object):
             attrs = h5["coords"].attrs
             return attrs["patch_level"], attrs["patch_size"]
 
+    def get_tile_polygons(self) -> list[shapely.Polygon]:
+        """
+        Retrieve polygons of tile bounds.
+
+        Returns
+        -------
+        List of tile shapely.Polygon objects.
+        """
+        if (not self.has_tissue_contours()) or (not self.has_tile_coords()):
+            raise ValueError("Tissue contours or tile coordinates not found.")
+
+        level, size = self.get_tile_coordinate_level_size()
+        scale = self.wsi.level_downsamples[level]
+        coords = self.get_tile_coordinates()
+
+        # Make a spatial index tree of the tiles
+        tiles = [
+            shapely.Polygon(
+                [
+                    (xy[0], xy[1]),
+                    ((xy[0] + (size * scale)), xy[1]),
+                    ((xy[0] + (size * scale)), (xy[1] + (size * scale))),
+                    (xy[0], (xy[1] + (size * scale))),
+                    (xy[0], xy[1]),
+                ]
+            )
+            for idx, xy in enumerate(coords)
+        ]
+        return tiles
+
+    def get_tile_tissue_piece(self) -> np.ndarray:
+        """
+        Retrieve which tile overlaps which tissue contour.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (N, M) where N is the number of tiles and M is the number of tissue contours.
+        """
+
+        # Make a spatial index tree of the tiles
+        tiles = self.get_tile_polygons()
+        tree = shapely.strtree.STRtree(tiles)
+
+        # Query the tree for each tissue contour
+        pieces = np.zeros((len(tiles), len(self.contours_tissue)), dtype=bool)
+        for i, cont in enumerate(self.contours_tissue):
+            poly = shapely.Polygon(cont.squeeze())
+            result = tree.query(poly)
+            pieces[:, i] = np.isin(range(len(tiles)), result)
+
+        return pieces
+
+    def get_tile_graph(
+        self, query_type="distance", max_dist: float | None = None
+    ) -> np.ndarray:
+        """
+        Retrieve a graph of tile spatial proximity.
+
+        Parameters
+        ----------
+        query_type: str
+            Type of query. Either "distance" or "knn".
+        max_dist: float
+            Maximum distance for distance-based queries. If None, use the tile size centered on tile centroids.
+
+        Returns
+        -------
+        np.ndarray
+            Array with edges of shape (2, N) where N is the number of edges.
+        """
+        from scipy.spatial import KDTree
+
+        assert query_type in ["distance", "knn"], "query_type must be 'distance' or 'knn'"
+
+        tiles = self.get_tile_polygons()
+        data = np.asarray([t.centroid.xy for t in tiles]).squeeze()
+        if max_dist is None:
+            level, size = self.get_tile_coordinate_level_size()
+            max_dist = size * self.wsi.level_downsamples[level] + 1
+
+        tree = KDTree(data)
+        if query_type == "distance":
+            edge_index = tree.query_pairs(max_dist, output_type="ndarray").T
+        elif query_type == "knn":
+            raise NotImplementedError("knn not implemented yet")
+            # dist, edge_index = tree.query(data, k=k)
+
+        return edge_index
+
+    def plot_tile_graph(self, output_file: Path | None = None) -> None:
+        """
+        Plot a graph of tile spatial proximity.
+
+        Parameters
+        ----------
+        output_file: Path
+            Path to output file. If None, save to `self.path.with_suffix(".tile_graph.png")`.
+
+        Returns
+        -------
+        None
+        """
+        import matplotlib.pyplot as plt
+
+        if output_file is None:
+            output_file = self.path.with_suffix(".tile_graph.png")
+
+        level = self._get_best_level((2000, 2000))
+        thumbnail = np.array(
+            self.wsi.read_region((0, 0), level, self.level_dim[level]).convert("RGB")
+        )
+        scale = self.wsi.level_downsamples[level]
+        coords = self.get_tile_coordinates() / scale
+        edge_index = self.get_tile_graph()
+        ar = thumbnail.shape[0] / thumbnail.shape[1]
+
+        fig, ax = plt.subplots(figsize=(10, 10 * ar))
+        ax.imshow(thumbnail)
+        ax.scatter(coords[:, 0], coords[:, 1], s=1, rasterized=True)
+        for edge_index in edge_index.T:
+            ax.plot(
+                coords[edge_index, 0],
+                coords[edge_index, 1],
+                color="black",
+                rasterized=True,
+            )
+        ax.axis("off")
+        fig.tight_layout()
+        fig.savefig(output_file, bbox_inches="tight", dpi=200)
+
     def get_tile_images(
         self,
         hdf5_file: Path | None = None,
@@ -1614,3 +1745,45 @@ class WholeSlideImage(object):
                 feats.append(model(batch.to(device)).cpu().numpy())
                 coords.append(coord)
         return np.concatenate(feats, axis=0), np.concatenate(coords, axis=0)
+
+    def as_torch_geometric_data(
+        self,
+        feats: np.ndarray | None = None,
+        coords: np.ndarray | None = None,
+        model_name: str | None = None,
+        data_loader_kws: dict = {},
+    ) -> torch_geometric.data.Data:
+        """
+        Return a torch_geometric.data.Data object for the whole slide image.
+
+        Parameters
+        ----------
+        feats : np.ndarray
+            Array of features.
+            By default, features extracted for tiles using self.inference() with `model_name` are used.
+        coords : np.ndarray
+            Array of coordinates.
+            By default, coordinates for tiles present as output of `slide.tile()` are used.
+        model_name : str
+            Name of the model to use for inference.
+        data_loader_kws : dict
+            Additional keyword arguments to pass to torch.utils.data.DataLoader.
+
+        Returns
+        -------
+        torch_geometric.data.Data
+        """
+        from torch_geometric.data import Data
+
+        if (feats is None) or (coords is None):
+            assert (
+                model_name is not None
+            ), "model_name must be provided when feats and coords are None"
+            feats, coords = self.inference(model_name, data_loader_kws=data_loader_kws)
+        else:
+            assert feats is not None, "feats must be provided when coords is not None"
+            assert coords is not None, "coords must be provided when feats is not None"
+
+        edge_index = self.get_tile_graph()
+        data = Data(x=feats, edge_index=edge_index, pos=coords)
+        return data
