@@ -5,7 +5,6 @@ import tempfile
 import requests
 import h5py
 import numpy as np
-import openslide
 import cv2
 import torch
 from torch.utils.data import Dataset
@@ -16,7 +15,7 @@ class WholeSlideBag(Dataset):
     def __init__(
         self,
         file_path,
-        wsi=None,
+        wsi,
         pretrained=False,
         custom_transforms=None,
         custom_downsample=1,
@@ -26,6 +25,7 @@ class WholeSlideBag(Dataset):
         """
         Args:
             file_path (string): Path to the .h5 file containing patched data.
+            wsi (openslide object): OpenSlide object
             pretrained (bool): Use ImageNet transforms
             custom_transforms (callable, optional): Optional transform to be applied on a sample
             custom_downsample (int): Custom defined downscale factor (overruled by target_patch_size)
@@ -34,8 +34,6 @@ class WholeSlideBag(Dataset):
         self.target = target
 
         self.pretrained = pretrained
-        if wsi is None:
-            wsi = openslide.open_slide(path)
         self.wsi = wsi
         if not custom_transforms:
             self.roi_transforms = default_transforms(pretrained=pretrained)
@@ -221,8 +219,6 @@ def collate_features(batch, with_coords: bool = False):
 
 
 def is_url(url: str | Path) -> bool:
-    import pathlib
-
     if isinstance(url, Path):
         url = url.as_posix()
     return url.startswith("http")
