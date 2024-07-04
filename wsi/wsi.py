@@ -109,6 +109,40 @@ class WholeSlideImage(object):
     def __repr__(self):
         return f"WholeSlideImage('{self.path}')"
 
+    def _assert_level_downsamples(self):
+        level_downsamples = []
+        dim_0 = self.wsi.level_dimensions[0]
+
+        for downsample, dim in zip(self.wsi.level_downsamples, self.wsi.level_dimensions):
+            estimated_downsample = (dim_0[0] / float(dim[0]), dim_0[1] / float(dim[1]))
+            (
+                level_downsamples.append(estimated_downsample)
+                if estimated_downsample
+                != (
+                    downsample,
+                    downsample,
+                )
+                else level_downsamples.append((downsample, downsample))
+            )
+
+        return level_downsamples
+
+    def _load_segmentation_legacy(self, pickle_file: Path | None = None) -> None:
+        import warnings
+        import pickle
+
+        warnings.warn(
+            "Loading segmentation results from a pickle file is deprecated. "
+            "Save segmentation results to an HDF5 file instead.",
+        )
+
+        if pickle_file is None:
+            pickle_file = self.path.with_suffix(".segmentation.pickle")
+
+        data = pickle.load(pickle_file.open("rb"))
+        self.contours_tissue = data["tissue"]
+        self.holes_tissue = data["holes"]
+
     def load_segmentation(self, hdf5_file: Path | None = None) -> None:
         """
         Load slide segmentation results from pickle file.
@@ -126,7 +160,27 @@ class WholeSlideImage(object):
         if hdf5_file is None:
             hdf5_file = self.hdf5_file
 
+        legacy_file = self.path.with_suffix(".segmentation.pickle")
+        if not hdf5_file.exists():
+            if legacy_file.exists():
+                self._load_segmentation_legacy(legacy_file)
+                return
+
+        req = [
+            "contours_tissue_breakpoints",
+            "contours_tissue",
+            "holes_tissue_breakpoints",
+            "holes_tissue",
+        ]
+
         with h5py.File(hdf5_file, "r") as f:
+            for r in req:
+                if r not in f:
+                    print(f"H5 file {hdf5_file} did not have the required keys!")
+                    if legacy_file.exists():
+                        self._load_segmentation_legacy(legacy_file)
+                        return
+                    raise ValueError(f"Required dataset {r} not found in {hdf5_file}")
             bpt = f["contours_tissue_breakpoints"][()]
             ct = f["contours_tissue"][()]
             self.contours_tissue = [
@@ -160,7 +214,7 @@ class WholeSlideImage(object):
         """
         if hdf5_file is None:
             hdf5_file = self.hdf5_file
-        with h5py.File(self.hdf5_file, mode) as f:
+        with h5py.File(hdf5_file, mode) as f:
             data = np.concatenate(self.contours_tissue)
             f.create_dataset("contours_tissue", data=data)
             bpt = [0] + np.cumsum([c.shape[0] for c in self.contours_tissue]).tolist()
@@ -466,24 +520,6 @@ class WholeSlideImage(object):
             [np.array(hole * scale, dtype="int32") for hole in holes]
             for holes in contours
         ]
-
-    def _assert_level_downsamples(self):
-        level_downsamples = []
-        dim_0 = self.wsi.level_dimensions[0]
-
-        for downsample, dim in zip(self.wsi.level_downsamples, self.wsi.level_dimensions):
-            estimated_downsample = (dim_0[0] / float(dim[0]), dim_0[1] / float(dim[1]))
-            (
-                level_downsamples.append(estimated_downsample)
-                if estimated_downsample
-                != (
-                    downsample,
-                    downsample,
-                )
-                else level_downsamples.append((downsample, downsample))
-            )
-
-        return level_downsamples
 
     def _process_contours(
         self,
