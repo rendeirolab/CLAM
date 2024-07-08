@@ -1819,8 +1819,7 @@ class WholeSlideImage(object):
 
     def inference(
         self,
-        model: torch.nn.Module | None = None,
-        model_name: str | None = None,
+        model: torch.nn.Module | str | None = None,
         model_repo: str = "pytorch/vision",
         device: str | None = None,
         data_loader_kws: dict = {},
@@ -1847,11 +1846,13 @@ class WholeSlideImage(object):
         from tqdm_loggable.auto import tqdm
 
         if isinstance(model, torch.nn.Module):
-            assert model_name is None, "model_name must be None when model is provided"
             model = cast(torch.nn.Module, model)
-        elif model_name is not None:
-            assert model is None, "model must be None when model_name is provided"
-            model = torch.hub.load(model_repo, model_name, weights="DEFAULT")
+        elif isinstance(model, str):
+            model = torch.hub.load(model_repo, model, weights="DEFAULT")
+        else:
+            raise ValueError(
+                f"model must be a string or a torch.nn.Module, not {type(model)}"
+            )
 
         if device is None:
             device = device or "cuda" if torch.cuda.is_available() else "cpu"
