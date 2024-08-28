@@ -1907,5 +1907,9 @@ class WholeSlideImage(object):
             assert coords is not None, "coords must be provided when feats is not None"
 
         edge_index = self.get_tile_graph()
-        data = Data(x=feats, edge_index=edge_index, pos=coords)
+        data = Data(
+            x=torch.tensor(feats),
+            edge_index=torch.tensor(edge_index),
+            pos=torch.tensor(coords),
+        )
         return data
