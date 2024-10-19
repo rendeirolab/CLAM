@@ -62,10 +62,12 @@ if not slide_file.exists():
         handle.write(req.content)
 
 # Instantiate slide object
+# # from a local file
 slide = WholeSlideImage(slide_file)
-
-# Instantiation can be done with custom attributes
-slide = WholeSlideImage(slide_file, attributes=dict(donor="GTEX-12ZZW"))
+# # from a URL (will be saved in temporary folder)
+slide = WholeSlideImage("https://brd.nci.nih.gov/brd/imagedownload/GTEX-O5YU-1426")
+# # instantiation can be done with custom attributes as well
+slide = WholeSlideImage(slide_file, attributes=dict(donor="GTEX-12ZZW", tissue='Ileum', sex='Male'))
 
 # Segment tissue (segmentation mask is stored as polygons in slide.contours_tissue)
 slide.segment()
@@ -113,6 +115,10 @@ feats, coords = slide.inference('resnet18')
 
 # Additional parameters can also be specified
 feats, coords = slide.inference('resnet18', device='cuda', data_loader_kws=dict(batch_size=512))
+
+# Generate a torch_geometric data object
+gdata = slide.as_torch_geometric_data(feats, coords)  # from existing features and coordinates
+gdata = slide.as_torch_geometric_data(model_name='resnet18')  # without
 ```
 
 ## Reference
@@ -132,3 +138,4 @@ Lu, M.Y., Williamson, D.F.K., Chen, T.Y. et al. Data-efficient and weakly superv
   publisher={Nature Publishing Group}
 }
 ```
+<!-- For the current code, please cite also the following paper: -->
