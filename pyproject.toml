@@ -54,7 +54,9 @@ doc = [
     "Sphinx",
     "sphinx-issues",
     "sphinx-rtd-theme",
-    "sphinx-autodoc-typehints"
+    "sphinx-autodoc-typehints",
+    "pydata-sphinx-theme",
+    "numpydoc",
 ]
 
 [project.urls]

@@ -1,5 +1,9 @@
 WSI
 ====
+
+[![Documentation Status](https://readthedocs.org/projects/wsi/badge/?version=latest&style=flat-square)](https://wsi.readthedocs.io/en/latest)
+
+
 This is a fork of the repository from [Mahmood lab's CLAM repository](https://github.com/mahmoodlab/CLAM).
 It is made available under the GPLv3 License and is available for non-commercial academic purposes.
 

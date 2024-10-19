@@ -1413,7 +1413,7 @@ class WholeSlideImage(object):
             return None
 
     # TODO: adapt and illustrate usage
-    def visHeatmap(
+    def _visHeatmap(
         self,
         scores,
         coords,
