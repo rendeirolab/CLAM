@@ -19,12 +19,9 @@ The package has been renamed to `wsi`.
 
 While the repository is private, make sure you [exchange SSH keys of the machine with Github.com](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
 
-Then simply install with `pip`:
+Then simply install with `pip` (make sure you have a recent enough version with `pip install pip -U`:
 ```bash
-# pip install git+ssh://git@github.com:rendeirolab/wsi.git
-git clone git@github.com:rendeirolab/wsi.git
-cd wsi
-pip install .
+pip install git+https://github.com/rendeirolab/wsi.git
 ```
 
 Note that the package uses setuptols-scm for version control and therefore the installation source needs to be a git repository (a zip file of source code won't work).
@@ -123,6 +120,16 @@ feats, coords = slide.inference('resnet18', device='cuda', data_loader_kws=dict(
 # Generate a torch_geometric data object
 gdata = slide.as_torch_geometric_data(feats, coords)  # from existing features and coordinates
 gdata = slide.as_torch_geometric_data(model_name='resnet18')  # without
+```
+
+## Development
+
+`wsi` will not be providing new features and future maintenance will be restricted to bugs. Please refer to our newer project [Lazyslide](https://github.com/rendeirolab/LazySlide) for a more modern, interoperable package for the analysis of whole-slide images.
+
+
+To contribute bug maintenance, clone the repository, open an issue in the [issue tracker](https://github.com/rendeirolab/wsi/issues), and submit a pull request.
+```
+git clone git@github.com:rendeirolab/wsi.git
 ```
 
 ## Reference

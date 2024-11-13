@@ -1843,7 +1843,7 @@ class WholeSlideImage(object):
         """
         from typing import cast
         import torch
-        from tqdm_loggable.auto import tqdm
+        from tqdm.auto import tqdm
 
         if isinstance(model, torch.nn.Module):
             model = cast(torch.nn.Module, model)
