@@ -200,13 +200,15 @@ class WholeSlideImage(object):
 
     def save_segmentation(self, hdf5_file: Path | None = None, mode: str = "a") -> None:
         """
-        Save slide segmentation results to pickle file.
+        Save slide segmentation results to an HDF5 file.
 
         Parameters
         ----------
         hdf5_file: Path
-            Path to file used to save segmentation.
-            If None, the segmentation results will be loaded from `self.hdf5_file`.
+            File path used to save segmentation.
+            If None, the segmentation results will be loaded from self.hdf5_file.
+        mode: str
+            File open mode.
 
         Returns
         -------
@@ -214,18 +216,30 @@ class WholeSlideImage(object):
         """
         if hdf5_file is None:
             hdf5_file = self.hdf5_file
+
         with h5py.File(hdf5_file, mode) as f:
             data = np.concatenate(self.contours_tissue)
+            if "contours_tissue" in f:
+                del f["contours_tissue"]
             f.create_dataset("contours_tissue", data=data)
+
             bpt = [0] + np.cumsum([c.shape[0] for c in self.contours_tissue]).tolist()
+            if "contours_tissue_breakpoints" in f:
+                del f["contours_tissue_breakpoints"]
             f.create_dataset("contours_tissue_breakpoints", data=bpt)
 
             holes = [h if h else [np.empty((0, 1, 2))] for h in self.holes_tissue]
             bph = [[0] + np.cumsum([h.shape[0] for h in c]).tolist() for c in holes]
-            n = max([len(_h) for _h in bph])
+            n = max(len(_h) for _h in bph)
             bph = np.asarray([_h + [0] * (n - len(_h)) for _h in bph]).reshape(-1, n)
+
             holesc = np.concatenate([np.concatenate(c) for c in holes])
+            if "holes_tissue" in f:
+                del f["holes_tissue"]
             f.create_dataset("holes_tissue", data=holesc)
+
+            if "holes_tissue_breakpoints" in f:
+                del f["holes_tissue_breakpoints"]
             f.create_dataset("holes_tissue_breakpoints", data=bph)
 
     def _segment_tissue(

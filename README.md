@@ -17,9 +17,7 @@ The package has been renamed to `wsi`.
 
 ## Installation
 
-While the repository is private, make sure you [exchange SSH keys of the machine with Github.com](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
-
-Then simply install with `pip` (make sure you have a recent enough version with `pip install pip -U`:
+Using `pip` (make sure you have a recent enough version with `pip install pip -U`:
 ```bash
 pip install git+https://github.com/rendeirolab/wsi.git
 ```
