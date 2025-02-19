@@ -24,8 +24,7 @@ requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.12.1",
     "matplotlib>=3.10.0",
-    "mypy>=1.14.1",
-    "numpy>=2.2.2",
+    "numpy",
     "opencv-python>=4.11.0.86",
     "openslide-bin>=4.0.0.6",
     "openslide-python>=1.4.1",
@@ -45,6 +44,7 @@ dynamic = ['version']
 [project.optional-dependencies]
 dev = [
     "black[d]>=24.10.0",
+    "mypy>=1.14.1",
     "git-lint>=0.1.2",
     "ipython>=8.31.0",
     "pylint>=3.3.3",
